@@ -584,23 +584,30 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
 
 
 def get_card_color(scryfall_data: dict) -> str:
-    """Determine the color category from Scryfall data."""
+    """Determine the color category from Scryfall data.
+
+    For double-faced cards (transform, modal, etc.), we use the FRONT face
+    to determine classification, since that's how you'll find it in your collection.
+    """
     if not scryfall_data:
         return "Colorless"
 
-    # Check if it's a land first
-    type_line = scryfall_data.get("type_line", "")
+    # For double-faced cards, use the front face for type and color determination
+    if "card_faces" in scryfall_data and len(scryfall_data["card_faces"]) > 0:
+        front_face = scryfall_data["card_faces"][0]
+        type_line = front_face.get("type_line", "")
+        colors = front_face.get("colors", [])
+    else:
+        type_line = scryfall_data.get("type_line", "")
+        colors = scryfall_data.get("colors", [])
+
+    # Check if it's a land first (front face only)
     if "Land" in type_line and "Creature" not in type_line:
         return "Land"
 
-    # Get colors (or color_identity for colorless cards that have identity)
-    colors = scryfall_data.get("colors", [])
-
-    # For double-faced cards, colors might be in card_faces
-    if not colors and "card_faces" in scryfall_data:
-        for face in scryfall_data["card_faces"]:
-            colors.extend(face.get("colors", []))
-        colors = list(set(colors))  # Remove duplicates
+    # Handle case where colors is None (some Scryfall responses)
+    if colors is None:
+        colors = []
 
     if len(colors) == 0:
         return "Colorless"
@@ -1100,7 +1107,12 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
 """
 
         for rarity in sorted_rarities:
-            rarity_cards = sorted(color_cards[rarity], key=lambda c: c.card_name)
+            # Sort cards: variants (non-traditional borders) first, then by card name
+            # This groups special printings together at the top for easier pulling
+            rarity_cards = sorted(
+                color_cards[rarity],
+                key=lambda c: (0 if c.variant else 1, c.card_name)
+            )
             rarity_name = RARITY_NAMES.get(rarity, rarity)
 
             html += f"""
