@@ -37,6 +37,7 @@ class Card:
     price: float
     total_price: float
     variant: Optional[str] = None
+    language: Optional[str] = None  # Non-English language if applicable
     color: str = "Colorless"  # Will be populated from Scryfall
 
 
@@ -306,6 +307,32 @@ def parse_card_line(line: str) -> Optional[Card]:
     elif "HeavilyPlayed" in line or "Heavily Played" in line:
         condition = "Heavily Played"
 
+    # Extract language - check for non-English languages in the line
+    # TCGPlayer includes language as part of the product description
+    # Be careful to avoid false positives (e.g., "RetroFrame" matching "FRA",
+    # "Titan" matching "ITA")
+    language = None
+    # Use word boundaries or hyphen boundaries for language detection
+    # TCGPlayer format typically has language as a separate field like "-Japanese-" or at end
+    language_patterns = [
+        # Full language names with word boundaries
+        (r'[-\s]Japanese[-\s]|Japanese$', 'Japanese'),
+        (r'[-\s]German[-\s]|German$', 'German'),
+        (r'[-\s]French[-\s]|French$', 'French'),
+        (r'[-\s]Italian[-\s]|Italian$', 'Italian'),
+        (r'[-\s]Spanish[-\s]|Spanish$', 'Spanish'),
+        (r'[-\s]Portuguese[-\s]|Portuguese$', 'Portuguese'),
+        (r'[-\s]Russian[-\s]|Russian$', 'Russian'),
+        (r'[-\s]Korean[-\s]|Korean$', 'Korean'),
+        (r'ChineseSimplified|SimplifiedChinese', 'Chinese (Simplified)'),
+        (r'ChineseTraditional|TraditionalChinese', 'Chinese (Traditional)'),
+        (r'[-\s]Phyrexian[-\s]|Phyrexian$', 'Phyrexian'),
+    ]
+    for pattern, lang_name in language_patterns:
+        if re.search(pattern, line):
+            language = lang_name
+            break
+
     # Extract card name - everything before the collector number
     if number_match:
         # Find position of #NUMBER in remainder
@@ -358,6 +385,7 @@ def parse_card_line(line: str) -> Optional[Card]:
         price=price,
         total_price=total_price,
         variant=variant,
+        language=language,
     )
 
 
@@ -735,6 +763,11 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             color: #ffd700;
             font-weight: bold;
         }}
+        .card-language {{
+            color: #ff6b6b;
+            font-weight: bold;
+            font-size: 0.9em;
+        }}
         .card-price {{
             text-align: right;
             color: #4caf50;
@@ -883,6 +916,7 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             for card in rarity_cards:
                 foil_badge = '<span class="card-foil"> ★ FOIL</span>' if card.is_foil else ''
                 variant_text = f" ({card.variant})" if card.variant else ""
+                language_badge = f'<span class="card-language"> [{card.language}]</span>' if card.language else ''
 
                 # Escape HTML in card name
                 safe_card_name = card.card_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -891,7 +925,7 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
                 html += f"""                <div class="card-item" data-index="{card_index}" onclick="toggleCard(this)">
                     <div class="card-qty">{card.quantity}x</div>
                     <div class="card-info">
-                        <div class="card-name">{safe_card_name}{variant_text}{foil_badge}</div>
+                        <div class="card-name">{safe_card_name}{variant_text}{foil_badge}{language_badge}</div>
                         <div class="card-details">{safe_set_name} #{card.collector_number} - {card.condition}</div>
                     </div>
                     <div class="card-price">${card.total_price:.2f}</div>
