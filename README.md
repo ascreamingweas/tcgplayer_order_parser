@@ -6,10 +6,14 @@ Parses TCGplayer packing slip PDFs and generates an HTML pull sheet organized by
 
 - **Color-organized output** - Cards grouped by color (WUBRG order), then Multicolor, Colorless, and Lands
 - **Rarity sorting** - Within each color, cards sorted by rarity (Mythic → Rare → Uncommon → Common)
-- **Preserves fulfillment details** - Card name, variant (Extended Art, Borderless, Showcase, etc.), foil status, set, collector number, condition, and price
+- **Variants first** - Within each rarity, special printings (Borderless, Showcase, Extended Art, Retro Frame, etc.) appear before traditional border cards
+- **Preserves fulfillment details** - Card name, variant, foil status, set, collector number, condition, and price
 - **Language detection** - Non-English cards (Japanese, German, French, Italian, etc.) are flagged with a visible badge
+- **Card image preview** - Hover over any card to see the actual card image from Scryfall
+- **Exact variant art** - Shows the correct art for each specific printing (Extended Art, Showcase, etc.)
 - **Interactive HTML** - Click cards to mark them as pulled; progress persists in your browser
-- **Scryfall integration** - Automatically looks up card colors via the Scryfall API
+- **Scryfall integration** - Automatically syncs set list and looks up card data via the Scryfall API
+- **Double-faced card support** - Transform and modal cards are classified by their front face
 
 ## Installation
 
@@ -39,8 +43,9 @@ python3 mtg_packing_slip_organizer.py "packing_slip.pdf" "output.html"
 
 The script will:
 1. Parse the PDF and extract all card entries
-2. Look up each card's color on Scryfall (cached to avoid duplicate lookups)
-3. Generate an HTML file organized by color and rarity
+2. Sync the latest set list from Scryfall (ensures new sets are always supported)
+3. Look up each card's color and image on Scryfall (cached to avoid duplicate lookups)
+4. Generate an HTML file organized by color, rarity, and variant type
 
 ## Output
 
@@ -48,6 +53,7 @@ The generated HTML includes:
 - **Summary stats** - Total cards, total value, line items
 - **Progress bar** - Track how many items you've pulled
 - **Color navigation** - Jump to specific color sections
+- **Card image hover** - See the actual card art when hovering over any card
 - **Click-to-mark** - Click any card to mark it as pulled (strikethrough + faded)
 - **Print-friendly** - Clean output when printing
 
@@ -55,6 +61,7 @@ The generated HTML includes:
 
 - Python 3.8+
 - pdfplumber
+- Internet connection (for Scryfall API)
 
 ## License
 
