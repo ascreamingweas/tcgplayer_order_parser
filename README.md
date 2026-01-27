@@ -7,6 +7,7 @@ Parses TCGplayer packing slip PDFs and generates an HTML pull sheet organized by
 - **Color-organized output** - Cards grouped by color (WUBRG order), then Multicolor, Colorless, and Lands
 - **Rarity sorting** - Within each color, cards sorted by rarity (Mythic → Rare → Uncommon → Common)
 - **Preserves fulfillment details** - Card name, variant (Extended Art, Borderless, Showcase, etc.), foil status, set, collector number, condition, and price
+- **Language detection** - Non-English cards (Japanese, German, French, Italian, etc.) are flagged with a visible badge
 - **Interactive HTML** - Click cards to mark them as pulled; progress persists in your browser
 - **Scryfall integration** - Automatically looks up card colors via the Scryfall API
 
