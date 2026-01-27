@@ -39,6 +39,7 @@ class Card:
     variant: Optional[str] = None
     language: Optional[str] = None  # Non-English language if applicable
     color: str = "Colorless"  # Will be populated from Scryfall
+    image_url: Optional[str] = None  # Scryfall card image URL
 
 
 # Rarity mapping
@@ -96,6 +97,115 @@ KNOWN_SET_PREFIXES = [
     "OutlawsofThunderJunction",
     "MurdersatKarlovManor",
 ]
+
+# Global cache for Scryfall set mapping (populated on first use)
+_scryfall_set_cache: Optional[dict] = None
+
+
+def fetch_scryfall_sets() -> dict:
+    """
+    Fetch all sets from Scryfall API and build a mapping from various name formats
+    to set codes. This ensures we always have the latest sets.
+    """
+    global _scryfall_set_cache
+
+    if _scryfall_set_cache is not None:
+        return _scryfall_set_cache
+
+    print("Syncing set list from Scryfall...")
+
+    try:
+        url = "https://api.scryfall.com/sets"
+        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode())
+
+        mapping = {}
+        sets_data = data.get("data", [])
+
+        for set_info in sets_data:
+            code = set_info.get("code", "")
+            name = set_info.get("name", "")
+
+            if not code or not name:
+                continue
+
+            # Skip art series, tokens, promos, etc. for the primary mapping
+            # These have different collector numbers than the main sets
+            set_type = set_info.get("set_type", "")
+            if set_type in ("token", "memorabilia", "promo", "alchemy"):
+                continue
+
+            # Add the exact name
+            mapping[name] = code
+
+            # Add version without spaces (TCGPlayer PDF format)
+            no_spaces = name.replace(" ", "")
+            mapping[no_spaces] = code
+
+            # Add version with colons but no spaces around them
+            colon_no_space = name.replace(": ", ":")
+            mapping[colon_no_space] = code
+
+            # Add version with no spaces at all (including around colons)
+            all_no_spaces = name.replace(" ", "").replace(":", "")
+            if all_no_spaces not in mapping:
+                mapping[all_no_spaces] = code
+
+        # Add some manual overrides for TCGPlayer-specific naming quirks
+        # TCGPlayer sometimes uses different names than Scryfall
+        manual_overrides = {
+            # TCGPlayer uses "Drop Series" suffix
+            "SecretLairDropSeries": "sld",
+            "Secret Lair Drop Series": "sld",
+            # TCGPlayer uses "Countdown Kit"
+            "SecretLairCountdownKit": "slc",
+            "Secret Lair Countdown Kit": "slc",
+            # TCGPlayer uses "Eternal-Legal" suffix for some sets
+            "Avatar:TheLastAirbender:Eternal-Legal": "tle",
+            "Avatar: The Last Airbender: Eternal-Legal": "tle",
+            "MarvelUniverseEternal-Legal": "mar",
+            "Marvel Universe Eternal-Legal": "mar",
+            # The List
+            "TheListReprints": "plst",
+            "The List Reprints": "plst",
+            # Time Spiral Remastered (TCGPlayer uses colon)
+            "TimeSpiral:Remastered": "tsr",
+            "Time Spiral: Remastered": "tsr",
+        }
+        mapping.update(manual_overrides)
+
+        _scryfall_set_cache = mapping
+        print(f"  Loaded {len(sets_data)} sets from Scryfall")
+        return mapping
+
+    except Exception as e:
+        print(f"  Warning: Could not fetch sets from Scryfall: {e}")
+        print("  Falling back to basic name matching")
+        _scryfall_set_cache = {}
+        return {}
+
+
+def get_scryfall_set_code(set_name: str) -> Optional[str]:
+    """Get the Scryfall set code for a TCGPlayer set name."""
+    mapping = fetch_scryfall_sets()
+
+    # Try exact match first
+    if set_name in mapping:
+        return mapping[set_name]
+
+    # Try without spaces
+    no_spaces = set_name.replace(" ", "")
+    if no_spaces in mapping:
+        return mapping[no_spaces]
+
+    # Try lowercase
+    lower = set_name.lower()
+    for key, code in mapping.items():
+        if key.lower() == lower:
+            return code
+
+    return None
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -393,9 +503,39 @@ def parse_card_line(line: str) -> Optional[Card]:
     )
 
 
-def search_scryfall(card_name: str, set_name: str = None) -> Optional[dict]:
-    """Search Scryfall for a card and return its data."""
-    # Clean up card name for search
+def search_scryfall_by_set(set_code: str, collector_number: str) -> Optional[dict]:
+    """Look up a specific card printing by set code and collector number."""
+    # Scryfall endpoint for exact set/number lookup
+    url = f"https://api.scryfall.com/cards/{set_code}/{collector_number}"
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            return data
+    except urllib.error.HTTPError:
+        return None
+    except Exception:
+        return None
+
+
+def search_scryfall(card_name: str, set_name: str = None, collector_number: str = None) -> Optional[dict]:
+    """Search Scryfall for a card and return its data.
+
+    If set_name and collector_number are provided, tries to look up the exact printing first.
+    Falls back to fuzzy name search if exact lookup fails.
+    """
+    # First, try exact lookup by set code and collector number if available
+    if set_name and collector_number:
+        # Try to map TCGPlayer set name to Scryfall set code
+        set_code = get_scryfall_set_code(set_name)
+
+        if set_code:
+            result = search_scryfall_by_set(set_code, collector_number)
+            if result:
+                return result
+
+    # Fall back to fuzzy name search
     search_name = card_name.strip()
 
     # Remove any remaining artifacts
@@ -469,6 +609,24 @@ def get_card_color(scryfall_data: dict) -> str:
     else:
         color_map = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
         return color_map.get(colors[0], "Colorless")
+
+
+def get_card_image_url(scryfall_data: dict) -> Optional[str]:
+    """Extract the card image URL from Scryfall data."""
+    if not scryfall_data:
+        return None
+
+    # Try top-level image_uris first (single-faced cards)
+    if "image_uris" in scryfall_data:
+        return scryfall_data["image_uris"].get("normal")
+
+    # For double-faced cards, use the front face image
+    if "card_faces" in scryfall_data and len(scryfall_data["card_faces"]) > 0:
+        face = scryfall_data["card_faces"][0]
+        if "image_uris" in face:
+            return face["image_uris"].get("normal")
+
+    return None
 
 
 def merge_continuation_lines(lines: list[str]) -> list[str]:
@@ -563,11 +721,14 @@ def get_search_name(card_name: str) -> str:
 
 
 def fetch_colors_from_scryfall(cards: list[Card]) -> list[Card]:
-    """Fetch color information for all cards from Scryfall."""
-    print("\nFetching card colors from Scryfall...")
+    """Fetch color and image information for all cards from Scryfall."""
+    print("\nFetching card data from Scryfall...")
 
-    # Cache to avoid duplicate lookups - keyed by normalized search name
-    color_cache = {}
+    # Cache to avoid duplicate lookups
+    # For variants, we cache by set+collector_number to get exact art
+    # For color lookups, we still cache by card name
+    image_cache = {}  # (set_name, collector_number) -> image_url
+    color_cache = {}  # card_name -> color
 
     # Track failed lookups for summary
     failed_lookups = []
@@ -576,28 +737,38 @@ def fetch_colors_from_scryfall(cards: list[Card]) -> list[Card]:
         # Get the core card name for searching (without variant artifacts)
         search_name = get_search_name(card.card_name)
 
-        # Create cache key from normalized search name
-        cache_key = search_name.lower().strip()
+        # Create cache keys
+        # Image cache uses set+collector for exact variant art
+        image_cache_key = (card.set_name, card.collector_number)
+        # Color cache uses card name (color is same across printings)
+        color_cache_key = search_name.lower().strip()
 
-        if cache_key in color_cache:
-            card.color = color_cache[cache_key]
+        # Check if we have cached data for this exact printing
+        if image_cache_key in image_cache and color_cache_key in color_cache:
+            card.color = color_cache[color_cache_key]
+            card.image_url = image_cache[image_cache_key]
             print(f"  [{i+1}/{len(cards)}] {card.card_name}: {card.color} (cached)")
         else:
             # Scryfall rate limit: 10 requests per second
             time.sleep(0.1)
 
-            scryfall_data = search_scryfall(search_name)
+            # Try to get exact printing with set code and collector number
+            scryfall_data = search_scryfall(search_name, card.set_name, card.collector_number)
             if scryfall_data:
                 card.color = get_card_color(scryfall_data)
+                card.image_url = get_card_image_url(scryfall_data)
                 official_name = scryfall_data.get("name", search_name)
                 print(f"  [{i+1}/{len(cards)}] {card.card_name} (searched: {search_name}) -> {official_name}: {card.color}")
                 # DO NOT overwrite card.card_name - keep the original for display
             else:
                 card.color = "Colorless"
+                card.image_url = None
                 failed_lookups.append(f"{card.card_name} (searched: {search_name})")
                 print(f"  [{i+1}/{len(cards)}] {card.card_name}: NOT FOUND (defaulting to Colorless)")
 
-            color_cache[cache_key] = card.color
+            # Cache both color and image
+            color_cache[color_cache_key] = card.color
+            image_cache[image_cache_key] = card.image_url
 
     if failed_lookups:
         print(f"\n  Warning: {len(failed_lookups)} cards could not be found on Scryfall:")
@@ -837,6 +1008,24 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             font-size: 0.9em;
         }}
 
+        /* Card image hover preview */
+        #card-preview {{
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            pointer-events: none;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            max-width: 250px;
+            max-height: 350px;
+        }}
+        #card-preview img {{
+            display: block;
+            width: 100%;
+            height: auto;
+            border-radius: 12px;
+        }}
+
         @media print {{
             body {{
                 background: #fff;
@@ -856,6 +1045,9 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
     </style>
 </head>
 <body>
+    <!-- Card image hover preview -->
+    <div id="card-preview"><img src="" alt="Card Preview"></div>
+
     <h1>MTG Order - Pull Sheet</h1>
     <div class="order-info">{order_number if order_number else 'TCGplayer Order'}</div>
 
@@ -921,12 +1113,13 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
                 foil_badge = '<span class="card-foil"> ★ FOIL</span>' if card.is_foil else ''
                 variant_text = f" ({card.variant})" if card.variant else ""
                 language_badge = f'<span class="card-language"> [{card.language}]</span>' if card.language else ''
+                image_attr = f' data-image="{card.image_url}"' if card.image_url else ''
 
                 # Escape HTML in card name
                 safe_card_name = card.card_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 safe_set_name = card.set_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-                html += f"""                <div class="card-item" data-index="{card_index}" onclick="toggleCard(this)">
+                html += f"""                <div class="card-item" data-index="{card_index}"{image_attr} onclick="toggleCard(this)">
                     <div class="card-qty">{card.quantity}x</div>
                     <div class="card-info">
                         <div class="card-name">{safe_card_name}{variant_text}{foil_badge}{language_badge}</div>
@@ -973,6 +1166,45 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             }}
         }});
         updateProgress();
+
+        // Card image hover preview
+        const preview = document.getElementById('card-preview');
+        const previewImg = preview.querySelector('img');
+
+        document.querySelectorAll('.card-item[data-image]').forEach((item) => {{
+            item.addEventListener('mouseenter', (e) => {{
+                const imageUrl = item.dataset.image;
+                if (imageUrl) {{
+                    previewImg.src = imageUrl;
+                    preview.style.display = 'block';
+                }}
+            }});
+
+            item.addEventListener('mousemove', (e) => {{
+                // Position preview to the right of cursor, or left if near edge
+                const padding = 20;
+                let x = e.clientX + padding;
+                let y = e.clientY - 100;
+
+                // Keep preview on screen
+                if (x + 260 > window.innerWidth) {{
+                    x = e.clientX - 260 - padding;
+                }}
+                if (y < 10) {{
+                    y = 10;
+                }}
+                if (y + 360 > window.innerHeight) {{
+                    y = window.innerHeight - 360;
+                }}
+
+                preview.style.left = x + 'px';
+                preview.style.top = y + 'px';
+            }});
+
+            item.addEventListener('mouseleave', () => {{
+                preview.style.display = 'none';
+            }});
+        }});
     </script>
 </body>
 </html>
