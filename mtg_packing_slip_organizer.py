@@ -293,6 +293,10 @@ def parse_card_line(line: str) -> Optional[Card]:
     if not rarity_match:
         # Try at end of string or before condition
         rarity_match = re.search(r'-([MRUCS])(?:$|-?Near|-?Lightly|-?Moderately|-?Heavily|-?Foil)', remainder)
+    if not rarity_match:
+        # Handle continuation lines where rarity appears after price (e.g., "$1.70M-NearMint")
+        # Search the full line for price followed by rarity
+        rarity_match = re.search(r'\$\d+\.?\d*([MRUCS])-', line)
     rarity = rarity_match.group(1) if rarity_match else "R"
 
     # Check for foil - can appear anywhere in the line
