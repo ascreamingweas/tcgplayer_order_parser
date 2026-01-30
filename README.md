@@ -22,23 +22,24 @@ Parses TCGplayer packing slip PDFs and generates an HTML pull sheet organized by
 git clone git@github.com:ascreamingweas/tcgplayer_order_parser.git
 cd tcgplayer_order_parser
 
-# Create a virtual environment and install dependencies
-python3 -m venv venv
-source venv/bin/activate
-pip install pdfplumber
+# Set up virtual environment and install dependencies
+make setup
 ```
 
 ## Usage
 
 ```bash
-# Activate the virtual environment
-source venv/bin/activate
-
-# Run the organizer on a packing slip PDF
-python3 mtg_packing_slip_organizer.py "path/to/TCGplayer_PackingSlip.pdf"
+# Run the organizer on a packing slip PDF (supports full paths)
+make run PDF=~/Downloads/TCGplayer_PackingSlips.pdf
 
 # Optionally specify output filename
-python3 mtg_packing_slip_organizer.py "packing_slip.pdf" "output.html"
+make run PDF=~/Downloads/packing_slip.pdf OUTPUT=my_orders.html
+
+# List generated HTML files
+make list
+
+# Clean up generated files
+make clean
 ```
 
 The script will:
@@ -48,6 +49,8 @@ The script will:
 4. Generate an HTML file organized by color, rarity, and variant type
 
 ## Output
+
+Generated HTML files are saved to the `output/` directory.
 
 The generated HTML includes:
 - **Summary stats** - Total cards, total value, line items
