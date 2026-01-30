@@ -861,6 +861,12 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             border-radius: 12px;
             overflow: hidden;
         }}
+        .color-section.collapsed .rarity-section {{
+            display: none;
+        }}
+        .color-section.section-complete .color-header {{
+            opacity: 0.6;
+        }}
         .color-header {{
             padding: 15px 20px;
             font-size: 1.4em;
@@ -868,6 +874,28 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             display: flex;
             align-items: center;
             gap: 10px;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .color-header:hover {{
+            background: rgba(255,255,255,0.05);
+        }}
+        .collapse-icon {{
+            margin-left: auto;
+            font-size: 0.8em;
+            transition: transform 0.2s;
+        }}
+        .color-section.collapsed .collapse-icon {{
+            transform: rotate(-90deg);
+        }}
+        .section-progress {{
+            font-size: 0.7em;
+            font-weight: normal;
+            color: #888;
+            margin-left: 10px;
+        }}
+        .section-progress.complete {{
+            color: #4caf50;
         }}
         .color-pip {{
             width: 24px;
@@ -996,6 +1024,55 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
         .nav-link:hover {{
             transform: scale(1.05);
         }}
+        .nav-link.complete {{
+            opacity: 0.5;
+            text-decoration: line-through;
+        }}
+        .nav-link .nav-progress {{
+            font-size: 0.75em;
+            opacity: 0.8;
+        }}
+        /* Dark text for light-colored nav buttons */
+        .nav-link.color-White,
+        .nav-link.color-Colorless,
+        .nav-link.color-Multicolor {{
+            color: #1a1a2e;
+        }}
+        .nav-link.color-White .nav-progress,
+        .nav-link.color-Colorless .nav-progress,
+        .nav-link.color-Multicolor .nav-progress {{
+            opacity: 0.7;
+        }}
+        .nav-controls {{
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #333;
+        }}
+        .nav-btn {{
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #2a2a3e;
+            color: #ccc;
+            font-size: 0.85em;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }}
+        .nav-btn:hover {{
+            background: #3a3a4e;
+            color: #fff;
+        }}
+        .nav-btn.danger {{
+            border-color: #c0392b;
+            color: #e74c3c;
+        }}
+        .nav-btn.danger:hover {{
+            background: #c0392b;
+            color: #fff;
+        }}
 
         .progress-bar {{
             width: 100%;
@@ -1085,11 +1162,18 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
         <div class="nav-links">
 """
 
-    # Add navigation links
+    # Add navigation links with progress counters
     for color in sorted_colors:
-        html += f'            <a href="#{color.lower()}" class="nav-link color-{color}">{color}</a>\n'
+        color_cards = organized[color]
+        section_total = sum(1 for rarity in color_cards.values() for _ in rarity)
+        html += f'            <a href="#{color.lower()}" class="nav-link color-{color}" data-section="{color.lower()}">{color} <span class="nav-progress">(<span class="nav-remaining">{section_total}</span>/{section_total})</span></a>\n'
 
     html += """        </div>
+        <div class="nav-controls">
+            <button class="nav-btn" onclick="expandAll()">Expand All</button>
+            <button class="nav-btn" onclick="collapseAll()">Collapse All</button>
+            <button class="nav-btn danger" onclick="resetProgress()">Reset Progress</button>
+        </div>
     </nav>
 """
 
@@ -1101,11 +1185,14 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
 
         color_total = sum(c.quantity for rarity in color_cards.values() for c in rarity)
 
+        section_item_count = sum(1 for rarity in color_cards.values() for _ in rarity)
         html += f"""
-    <div class="color-section" id="{color.lower()}">
-        <div class="color-header header-{color}">
+    <div class="color-section" id="{color.lower()}" data-section-total="{section_item_count}">
+        <div class="color-header header-{color}" onclick="toggleSection(this.parentElement)">
             <span class="color-pip color-{color}"></span>
             {color} ({color_total} cards)
+            <span class="section-progress"><span class="section-remaining">{section_item_count}</span> remaining</span>
+            <span class="collapse-icon">▼</span>
         </div>
 """
 
@@ -1162,6 +1249,87 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             document.getElementById('progress-fill').style.width = (checked / totalItems * 100) + '%';
         }}
 
+        function updateSectionProgress() {{
+            document.querySelectorAll('.color-section').forEach((section) => {{
+                const total = parseInt(section.dataset.sectionTotal);
+                const checked = section.querySelectorAll('.card-item.checked').length;
+                const remaining = total - checked;
+                const sectionId = section.id;
+
+                // Update section header
+                const progressSpan = section.querySelector('.section-remaining');
+                const progressContainer = section.querySelector('.section-progress');
+                if (progressSpan) {{
+                    progressSpan.textContent = remaining;
+                }}
+                if (progressContainer) {{
+                    if (remaining === 0) {{
+                        progressContainer.classList.add('complete');
+                        progressContainer.innerHTML = '✓ Complete';
+                        section.classList.add('section-complete');
+                    }} else {{
+                        progressContainer.classList.remove('complete');
+                        progressContainer.innerHTML = '<span class="section-remaining">' + remaining + '</span> remaining';
+                        section.classList.remove('section-complete');
+                    }}
+                }}
+
+                // Update nav link
+                const navLink = document.querySelector('.nav-link[data-section="' + sectionId + '"]');
+                if (navLink) {{
+                    const navRemaining = navLink.querySelector('.nav-remaining');
+                    if (navRemaining) {{
+                        navRemaining.textContent = remaining;
+                    }}
+                    if (remaining === 0) {{
+                        navLink.classList.add('complete');
+                    }} else {{
+                        navLink.classList.remove('complete');
+                    }}
+                }}
+            }});
+        }}
+
+        function toggleSection(section) {{
+            section.classList.toggle('collapsed');
+            const sectionId = section.id;
+            if (section.classList.contains('collapsed')) {{
+                localStorage.setItem('section-' + sectionId + '-collapsed', 'true');
+            }} else {{
+                localStorage.removeItem('section-' + sectionId + '-collapsed');
+            }}
+        }}
+
+        function expandAll() {{
+            document.querySelectorAll('.color-section').forEach((section) => {{
+                section.classList.remove('collapsed');
+                localStorage.removeItem('section-' + section.id + '-collapsed');
+            }});
+        }}
+
+        function collapseAll() {{
+            document.querySelectorAll('.color-section').forEach((section) => {{
+                section.classList.add('collapsed');
+                localStorage.setItem('section-' + section.id + '-collapsed', 'true');
+            }});
+        }}
+
+        function resetProgress() {{
+            if (!confirm('Reset all progress? This will uncheck all cards and cannot be undone.')) {{
+                return;
+            }}
+            document.querySelectorAll('.card-item').forEach((item) => {{
+                item.classList.remove('checked');
+                localStorage.removeItem('card-' + item.dataset.index);
+            }});
+            document.querySelectorAll('.color-section').forEach((section) => {{
+                section.classList.remove('collapsed');
+                localStorage.removeItem('section-' + section.id + '-collapsed');
+            }});
+            updateProgress();
+            updateSectionProgress();
+        }}
+
         function toggleCard(element) {{
             element.classList.toggle('checked');
             const index = element.dataset.index;
@@ -1171,6 +1339,7 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
                 localStorage.removeItem('card-' + index);
             }}
             updateProgress();
+            updateSectionProgress();
         }}
 
         // Restore checked state on load
@@ -1180,7 +1349,29 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
                 item.classList.add('checked');
             }}
         }});
+
+        // Restore collapsed state on load
+        document.querySelectorAll('.color-section').forEach((section) => {{
+            const sectionId = section.id;
+            if (localStorage.getItem('section-' + sectionId + '-collapsed') === 'true') {{
+                section.classList.add('collapsed');
+            }}
+        }});
+
         updateProgress();
+        updateSectionProgress();
+
+        // Auto-expand section when clicking nav link
+        document.querySelectorAll('.nav-link').forEach((link) => {{
+            link.addEventListener('click', (e) => {{
+                const sectionId = link.dataset.section;
+                const section = document.getElementById(sectionId);
+                if (section && section.classList.contains('collapsed')) {{
+                    section.classList.remove('collapsed');
+                    localStorage.removeItem('section-' + sectionId + '-collapsed');
+                }}
+            }});
+        }});
 
         // Card image hover preview
         const preview = document.getElementById('card-preview');
