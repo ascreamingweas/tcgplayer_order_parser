@@ -8,10 +8,12 @@ This tool parses TCGplayer packing slip PDFs and generates an interactive HTML p
 
 ```
 tcgplayer_order_parser/
-├── mtg_packing_slip_organizer.py   # Main application (~1,275 lines)
+├── mtg_packing_slip_organizer.py   # Main application (~1,470 lines)
 ├── README.md                        # User documentation
 ├── Makefile                         # Build/run automation
 ├── Context.md                       # This file
+├── .gitignore                       # Git ignore rules
+├── output/                          # Generated HTML files (gitignored)
 └── venv/                            # Python virtual environment
 ```
 
@@ -57,6 +59,11 @@ class Card:
 | Card Images | Hover preview showing actual card art |
 | Language Detection | Flags non-English cards with visible badge |
 | Progress Tracking | Click to mark pulled; persists in localStorage |
+| Collapsible Sections | Click color headers to collapse/expand; state persists |
+| Section Progress | Each section shows remaining count; "✓ Complete" when done |
+| Nav Progress | Color buttons show remaining/total; auto-expand on click |
+| Expand/Collapse All | Buttons to quickly expand or collapse all sections |
+| Reset Progress | Clear all checked cards and collapsed state with confirmation |
 
 ## Dependencies
 
@@ -70,15 +77,20 @@ class Card:
 # Setup (one time)
 make setup
 
-# Process a packing slip
-make run PDF=TCGplayer_PackingSlips_20260127_114359.pdf
+# Process a packing slip (supports full paths from anywhere)
+make run PDF=~/Downloads/TCGplayer_PackingSlips.pdf
 
 # With custom output filename
-make run PDF=packing_slip.pdf OUTPUT=my_orders.html
+make run PDF=~/Downloads/packing_slip.pdf OUTPUT=my_orders.html
 
-# List available PDFs
+# List generated HTML files
 make list
+
+# Clean up generated files
+make clean
 ```
+
+Output files are saved to the `output/` directory.
 
 ## Key Code Sections
 
@@ -107,7 +119,12 @@ make list
 - `generate_html()` - Creates the complete HTML output
 - Dark theme with color-coded sections
 - Responsive grid layout
-- JavaScript for interactive features (mark as pulled, progress tracking)
+- JavaScript for interactive features:
+  - Click cards to mark as pulled (strikethrough + faded)
+  - Click section headers to collapse/expand
+  - Per-section and overall progress tracking
+  - Expand All / Collapse All / Reset Progress buttons
+  - All state persists in browser localStorage
 
 ## Common Issues & Solutions
 
@@ -136,6 +153,15 @@ Multiple regex patterns handle various PDF formatting variations where rarity co
   - `/sets` - Get all Magic sets
   - `/cards/{set_code}/{collector_number}` - Get card by set and number
   - `/cards/named?fuzzy={name}` - Fuzzy name search fallback
+
+## localStorage Keys
+
+The generated HTML uses browser localStorage to persist state. Keys are prefixed to avoid conflicts:
+
+- `card-{index}` - Checked state for each card item
+- `section-{colorId}-collapsed` - Collapsed state for each color section
+
+Use the "Reset Progress" button in the generated HTML to clear all state, or manually clear localStorage if regenerating with different card ordering.
 
 ## Future Enhancement Ideas
 
