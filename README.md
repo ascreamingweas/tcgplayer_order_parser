@@ -55,10 +55,16 @@ Generated HTML files are saved to the `output/` directory.
 The generated HTML includes:
 - **Summary stats** - Total cards, total value, line items
 - **Progress bar** - Track how many items you've pulled
-- **Color navigation** - Jump to specific color sections
+- **Color navigation** - Jump to specific color sections; shows remaining count per section
+- **Collapsible sections** - Click any color header to collapse/expand; auto-expands on nav click
+- **Section progress** - Each section shows remaining items; displays "✓ Complete" when done
 - **Card image hover** - See the actual card art when hovering over any card
 - **Click-to-mark** - Click any card to mark it as pulled (strikethrough + faded)
+- **Expand/Collapse All** - Buttons to quickly manage all sections
+- **Reset Progress** - Clear all checked items when starting fresh or regenerating
 - **Print-friendly** - Clean output when printing
+
+All progress and collapse states persist in your browser's localStorage.
 
 ## Requirements
 
