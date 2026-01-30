@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+
+# Output directory (generated HTML files)
+output/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Sample/test PDF files
+*.pdf
