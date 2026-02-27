@@ -1,0 +1,239 @@
+<!--
+  MTG Packing Slip Organizer — WordPress Embed
+
+  Paste this into a Custom HTML block on any WordPress page.
+  Replace YOUR_API_URL below with your deployed API URL, e.g.:
+    https://mtg-organizer.onrender.com
+-->
+
+<div id="mtg-organizer">
+  <style>
+    #mtg-organizer {
+      max-width: 600px;
+      margin: 0 auto;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    #mtg-organizer .upload-area {
+      border: 2px dashed #666;
+      border-radius: 12px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      background: #f9f9f9;
+    }
+    #mtg-organizer .upload-area:hover,
+    #mtg-organizer .upload-area.drag {
+      border-color: #6c63ff;
+      background: #f0eeff;
+    }
+    #mtg-organizer .upload-area input { display: none; }
+    #mtg-organizer .upload-area .label {
+      font-size: 1.1em;
+      color: #555;
+    }
+    #mtg-organizer .upload-area .filename {
+      color: #6c63ff;
+      margin-top: 10px;
+      font-weight: 600;
+    }
+    #mtg-organizer button {
+      display: block;
+      margin: 20px auto 0;
+      padding: 12px 40px;
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1em;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #mtg-organizer button:hover { background: #5a52d5; }
+    #mtg-organizer button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    #mtg-organizer .status {
+      text-align: center;
+      margin-top: 15px;
+      color: #666;
+      min-height: 1.5em;
+    }
+    #mtg-organizer .status.error { color: #d32f2f; }
+    #mtg-organizer .status.success { color: #2e7d32; }
+
+    #mtg-organizer .processing { display: none; margin-top: 20px; }
+    #mtg-organizer .processing.active { display: block; }
+    #mtg-organizer .proc-bar-wrap {
+      background: #e0e0e0; border-radius: 6px; height: 24px;
+      overflow: hidden; position: relative;
+    }
+    #mtg-organizer .proc-bar-fill {
+      background: linear-gradient(90deg, #6c63ff, #48c6ef);
+      height: 100%; width: 0%; transition: width 0.3s;
+      border-radius: 6px;
+    }
+    #mtg-organizer .proc-bar-text {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.8em; color: #fff; font-weight: 600;
+    }
+    #mtg-organizer .proc-detail {
+      margin-top: 8px; font-size: 0.85em; color: #888;
+      text-align: center;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+  </style>
+
+  <div class="upload-area" id="mtgDropZone">
+    <input type="file" id="mtgFileInput" accept=".pdf">
+    <div class="label">Drop a TCGplayer packing slip PDF here, or click to browse</div>
+    <div class="filename" id="mtgFileName"></div>
+  </div>
+
+  <button id="mtgSubmitBtn" disabled>Generate Pull Sheet</button>
+
+  <div class="processing" id="mtgProcessing">
+    <div class="proc-bar-wrap">
+      <div class="proc-bar-fill" id="mtgProcFill"></div>
+      <div class="proc-bar-text" id="mtgProcText">Starting...</div>
+    </div>
+    <div class="proc-detail" id="mtgProcDetail"></div>
+  </div>
+
+  <div class="status" id="mtgStatus"></div>
+</div>
+
+<script>
+(function() {
+  // ============================================================
+  // CHANGE THIS to your deployed API URL (no trailing slash)
+  const API_URL = 'https://YOUR_API_URL';
+  // ============================================================
+
+  const dropZone = document.getElementById('mtgDropZone');
+  const fileInput = document.getElementById('mtgFileInput');
+  const fileName = document.getElementById('mtgFileName');
+  const submitBtn = document.getElementById('mtgSubmitBtn');
+  const status = document.getElementById('mtgStatus');
+  const processing = document.getElementById('mtgProcessing');
+  const procFill = document.getElementById('mtgProcFill');
+  const procText = document.getElementById('mtgProcText');
+  const procDetail = document.getElementById('mtgProcDetail');
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag');
+    if (e.dataTransfer.files.length) {
+      fileInput.files = e.dataTransfer.files;
+      handleFile(e.dataTransfer.files[0]);
+    }
+  });
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) handleFile(fileInput.files[0]);
+  });
+
+  function handleFile(file) {
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      status.textContent = 'Please select a PDF file.';
+      status.className = 'status error';
+      return;
+    }
+    fileName.textContent = file.name;
+    submitBtn.disabled = false;
+    status.textContent = '';
+    status.className = 'status';
+  }
+
+  submitBtn.addEventListener('click', async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    submitBtn.disabled = true;
+    status.textContent = '';
+    status.className = 'status';
+
+    processing.classList.add('active');
+    procFill.style.width = '0%';
+    procText.textContent = 'Uploading PDF...';
+    procDetail.textContent = '';
+
+    const form = new FormData();
+    form.append('file', file);
+    let jobId;
+
+    try {
+      const uploadRes = await fetch(API_URL + '/api/parse', { method: 'POST', body: form });
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json();
+        throw new Error(err.detail || 'Upload failed');
+      }
+      const uploadData = await uploadRes.json();
+      jobId = uploadData.job_id;
+      procText.textContent = `Parsing PDF (${uploadData.card_count} cards)...`;
+      procDetail.textContent = 'Looking up card data on Scryfall...';
+    } catch (e) {
+      processing.classList.remove('active');
+      status.textContent = e.message;
+      status.className = 'status error';
+      submitBtn.disabled = false;
+      return;
+    }
+
+    try {
+      const evtSource = new EventSource(API_URL + `/api/parse/${jobId}/progress`);
+
+      evtSource.addEventListener('progress', (e) => {
+        const d = JSON.parse(e.data);
+        const pct = Math.round((d.current / d.total) * 100);
+        procFill.style.width = pct + '%';
+        procText.textContent = `Looking up cards: ${d.current} / ${d.total}`;
+        procDetail.textContent = `${d.card_name} — ${d.status}`;
+      });
+
+      evtSource.addEventListener('complete', (e) => {
+        evtSource.close();
+        const d = JSON.parse(e.data);
+        procFill.style.width = '100%';
+        procText.textContent = 'Done!';
+        procDetail.textContent = 'Opening pull sheet...';
+
+        const blob = new Blob([d.html], { type: 'text/html' });
+        window.open(URL.createObjectURL(blob), '_blank');
+
+        setTimeout(() => {
+          processing.classList.remove('active');
+          status.textContent = 'Pull sheet opened in a new tab.';
+          status.className = 'status success';
+          submitBtn.disabled = false;
+        }, 800);
+      });
+
+      evtSource.addEventListener('error_event', (e) => {
+        evtSource.close();
+        const d = JSON.parse(e.data);
+        processing.classList.remove('active');
+        status.textContent = d.detail || 'Processing failed';
+        status.className = 'status error';
+        submitBtn.disabled = false;
+      });
+
+      evtSource.onerror = () => {
+        evtSource.close();
+        processing.classList.remove('active');
+        status.textContent = 'Connection lost during processing.';
+        status.className = 'status error';
+        submitBtn.disabled = false;
+      };
+    } catch (e) {
+      processing.classList.remove('active');
+      status.textContent = e.message;
+      status.className = 'status error';
+      submitBtn.disabled = false;
+    }
+  });
+})();
+</script>

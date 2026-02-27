@@ -20,3 +20,6 @@ __pycache__/
 
 # Sample/test PDF files
 *.pdf
+
+# Environment variables
+.env

@@ -58,56 +58,40 @@ COLOR_ORDER = {
     "Land": 7,
 }
 
-# Known set name patterns (to help with parsing)
-# These are patterns that help identify where set names end
-KNOWN_SET_PREFIXES = [
-    "LorwynEclipsed",
-    "Avatar:TheLastAirbender:Eternal-Legal",
-    "Avatar:TheLastAirbender",
-    "MarvelUniverseEternal-Legal",
-    "Marvel'sSpider-Man",
-    "EdgeofEternities",
-    "Commander:EdgeofEternities",
-    "FINALFANTASY",
-    "Commander:FINALFANTASY",
-    "Tarkir:Dragonstorm",
-    "Commander:Tarkir:Dragonstorm",
-    "Aetherdrift",
-    "Phyrexia:AllWillBeOne",
-    "WaroftheSpark",
-    "Foundations",
-    "CommanderLegends:BattleforBaldur'sGate",
-    "Commander:OutlawsofThunderJunction",
-    "Commander:StreetsofNewCapenna",
-    "Commander2016",
-    "ModernHorizons3",
-    "RavnicaRemastered",
-    "TimeSpiral:Remastered",
-    "TheListReprints",
-    "MysteryBooster2",
-    "SecretLairDropSeries",
-    "SecretLairCountdownKit",
-    "Urza'sLegacy",
-    "FromtheVault:Lore",
-    "PromoPack:OutlawsofThunderJunction",
-    "PromoPack:MarchoftheMachine",
-    "PromoPack:Kamigawa:NeonDynasty",
-    "CommanderMasters",
-    "Innistrad:MidnightHunt",
-    "OutlawsofThunderJunction",
-    "MurdersatKarlovManor",
-]
+# TCGPlayer-specific set name overrides that don't match Scryfall naming.
+# These supplement the dynamically-fetched Scryfall set list.
+TCGPLAYER_SET_OVERRIDES = {
+    "SecretLairDropSeries": "sld",
+    "Secret Lair Drop Series": "sld",
+    "SecretLairCountdownKit": "slc",
+    "Secret Lair Countdown Kit": "slc",
+    "Avatar:TheLastAirbender:Eternal-Legal": "tle",
+    "Avatar: The Last Airbender: Eternal-Legal": "tle",
+    "MarvelUniverseEternal-Legal": "mar",
+    "Marvel Universe Eternal-Legal": "mar",
+    "TheListReprints": "plst",
+    "The List Reprints": "plst",
+    "TimeSpiral:Remastered": "tsr",
+    "Time Spiral: Remastered": "tsr",
+}
 
 # Global cache for Scryfall set mapping (populated on first use)
 _scryfall_set_cache: Optional[dict] = None
+# Global cache for set prefixes used in PDF parsing (populated alongside set cache)
+_set_prefix_cache: Optional[list] = None
+# Track how many sets were loaded (for diagnostics)
+_scryfall_set_count: int = 0
+# Track the latest sets by release date (for diagnostics)
+_latest_sets: list[dict] = []
 
 
 def fetch_scryfall_sets() -> dict:
     """
     Fetch all sets from Scryfall API and build a mapping from various name formats
-    to set codes. This ensures we always have the latest sets.
+    to set codes. Also builds the set prefix list used for PDF parsing.
+    This ensures new sets are always supported without code changes.
     """
-    global _scryfall_set_cache
+    global _scryfall_set_cache, _set_prefix_cache, _scryfall_set_count, _latest_sets
 
     if _scryfall_set_cache is not None:
         return _scryfall_set_cache
@@ -116,12 +100,25 @@ def fetch_scryfall_sets() -> dict:
 
     try:
         url = "https://api.scryfall.com/sets"
-        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read().decode())
 
         mapping = {}
+        prefixes = set()
         sets_data = data.get("data", [])
+        _scryfall_set_count = len(sets_data)
+
+        # Track the 5 most recently released sets (by release_at date)
+        sorted_by_release = sorted(
+            [s for s in sets_data if s.get("released_at")],
+            key=lambda s: s["released_at"],
+            reverse=True,
+        )
+        _latest_sets = [
+            {"name": s["name"], "code": s["code"], "released_at": s["released_at"]}
+            for s in sorted_by_release[:5]
+        ]
 
         for set_info in sets_data:
             code = set_info.get("code", "")
@@ -142,48 +139,57 @@ def fetch_scryfall_sets() -> dict:
             # Add version without spaces (TCGPlayer PDF format)
             no_spaces = name.replace(" ", "")
             mapping[no_spaces] = code
+            prefixes.add(no_spaces)
 
             # Add version with colons but no spaces around them
             colon_no_space = name.replace(": ", ":")
             mapping[colon_no_space] = code
+            prefixes.add(colon_no_space)
 
             # Add version with no spaces at all (including around colons)
             all_no_spaces = name.replace(" ", "").replace(":", "")
             if all_no_spaces not in mapping:
                 mapping[all_no_spaces] = code
+            prefixes.add(all_no_spaces)
 
-        # Add some manual overrides for TCGPlayer-specific naming quirks
-        # TCGPlayer sometimes uses different names than Scryfall
-        manual_overrides = {
-            # TCGPlayer uses "Drop Series" suffix
-            "SecretLairDropSeries": "sld",
-            "Secret Lair Drop Series": "sld",
-            # TCGPlayer uses "Countdown Kit"
-            "SecretLairCountdownKit": "slc",
-            "Secret Lair Countdown Kit": "slc",
-            # TCGPlayer uses "Eternal-Legal" suffix for some sets
-            "Avatar:TheLastAirbender:Eternal-Legal": "tle",
-            "Avatar: The Last Airbender: Eternal-Legal": "tle",
-            "MarvelUniverseEternal-Legal": "mar",
-            "Marvel Universe Eternal-Legal": "mar",
-            # The List
-            "TheListReprints": "plst",
-            "The List Reprints": "plst",
-            # Time Spiral Remastered (TCGPlayer uses colon)
-            "TimeSpiral:Remastered": "tsr",
-            "Time Spiral: Remastered": "tsr",
-        }
-        mapping.update(manual_overrides)
+        # Add TCGPlayer-specific overrides
+        mapping.update(TCGPLAYER_SET_OVERRIDES)
+        prefixes.update(TCGPLAYER_SET_OVERRIDES.keys())
 
         _scryfall_set_cache = mapping
-        print(f"  Loaded {len(sets_data)} sets from Scryfall")
+        _set_prefix_cache = sorted(prefixes, key=len, reverse=True)
+        print(f"  Loaded {_scryfall_set_count} sets from Scryfall ({len(prefixes)} parsing prefixes)")
         return mapping
 
     except Exception as e:
         print(f"  Warning: Could not fetch sets from Scryfall: {e}")
         print("  Falling back to basic name matching")
         _scryfall_set_cache = {}
+        _set_prefix_cache = sorted(TCGPLAYER_SET_OVERRIDES.keys(), key=len, reverse=True)
         return {}
+
+
+def get_set_prefixes() -> list[str]:
+    """
+    Return the list of known set name prefixes for PDF parsing.
+    Dynamically built from Scryfall data on first call.
+    """
+    if _set_prefix_cache is None:
+        fetch_scryfall_sets()
+    return _set_prefix_cache or []
+
+
+def get_set_sync_status() -> dict:
+    """Return diagnostic info about the current set data."""
+    if _scryfall_set_cache is None:
+        fetch_scryfall_sets()
+    return {
+        "sets_loaded": _scryfall_set_count,
+        "prefix_count": len(_set_prefix_cache) if _set_prefix_cache else 0,
+        "tcgplayer_overrides": len(TCGPLAYER_SET_OVERRIDES),
+        "cache_populated": _scryfall_set_cache is not None and len(_scryfall_set_cache) > 0,
+        "latest_sets": _latest_sets,
+    }
 
 
 def get_scryfall_set_code(set_name: str) -> Optional[str]:
@@ -299,10 +305,8 @@ def extract_set_and_card(description: str) -> tuple[str, str]:
     Extract the set name and card name from the description.
     Returns (set_name, remaining_description)
     """
-    # Sort known prefixes by length (longest first) to match most specific first
-    sorted_prefixes = sorted(KNOWN_SET_PREFIXES, key=len, reverse=True)
-
-    for prefix in sorted_prefixes:
+    # Use dynamically-built prefix list (already sorted longest-first)
+    for prefix in get_set_prefixes():
         if description.startswith(prefix + "-"):
             return (prefix, description[len(prefix) + 1:])
 
@@ -512,7 +516,7 @@ def search_scryfall_by_set(set_code: str, collector_number: str) -> Optional[dic
     url = f"https://api.scryfall.com/cards/{set_code}/{collector_number}"
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
             return data
@@ -551,7 +555,7 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
     url = f"{base_url}?{urllib.parse.urlencode(params)}"
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
             return data
@@ -561,7 +565,7 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
             params = {"exact": search_name}
             url = f"{base_url}?{urllib.parse.urlencode(params)}"
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0"})
+                req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
                 with urllib.request.urlopen(req, timeout=10) as response:
                     data = json.loads(response.read().decode())
                     return data
@@ -574,7 +578,7 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
                 params = {"fuzzy": simple_name}
                 url = f"{base_url}?{urllib.parse.urlencode(params)}"
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
                     with urllib.request.urlopen(req, timeout=10) as response:
                         data = json.loads(response.read().decode())
                         return data
@@ -730,8 +734,14 @@ def get_search_name(card_name: str) -> str:
     return search_name
 
 
-def fetch_colors_from_scryfall(cards: list[Card]) -> list[Card]:
-    """Fetch color and image information for all cards from Scryfall."""
+def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card]:
+    """Fetch color and image information for all cards from Scryfall.
+
+    Args:
+        cards: List of Card objects to look up.
+        on_progress: Optional callback called with (current_index, total, card_name, status)
+                     for each card processed. Used by the API for streaming progress.
+    """
     print("\nFetching card data from Scryfall...")
 
     # Cache to avoid duplicate lookups
@@ -743,6 +753,7 @@ def fetch_colors_from_scryfall(cards: list[Card]) -> list[Card]:
     # Track failed lookups for summary
     failed_lookups = []
 
+    total = len(cards)
     for i, card in enumerate(cards):
         # Get the core card name for searching (without variant artifacts)
         search_name = get_search_name(card.card_name)
@@ -757,7 +768,8 @@ def fetch_colors_from_scryfall(cards: list[Card]) -> list[Card]:
         if image_cache_key in image_cache and color_cache_key in color_cache:
             card.color = color_cache[color_cache_key]
             card.image_url = image_cache[image_cache_key]
-            print(f"  [{i+1}/{len(cards)}] {card.card_name}: {card.color} (cached)")
+            status = f"{card.color} (cached)"
+            print(f"  [{i+1}/{total}] {card.card_name}: {status}")
         else:
             # Scryfall rate limit: 10 requests per second
             time.sleep(0.1)
@@ -768,17 +780,22 @@ def fetch_colors_from_scryfall(cards: list[Card]) -> list[Card]:
                 card.color = get_card_color(scryfall_data)
                 card.image_url = get_card_image_url(scryfall_data)
                 official_name = scryfall_data.get("name", search_name)
-                print(f"  [{i+1}/{len(cards)}] {card.card_name} (searched: {search_name}) -> {official_name}: {card.color}")
+                status = card.color
+                print(f"  [{i+1}/{total}] {card.card_name} (searched: {search_name}) -> {official_name}: {card.color}")
                 # DO NOT overwrite card.card_name - keep the original for display
             else:
                 card.color = "Colorless"
                 card.image_url = None
+                status = "NOT FOUND"
                 failed_lookups.append(f"{card.card_name} (searched: {search_name})")
-                print(f"  [{i+1}/{len(cards)}] {card.card_name}: NOT FOUND (defaulting to Colorless)")
+                print(f"  [{i+1}/{total}] {card.card_name}: NOT FOUND (defaulting to Colorless)")
 
             # Cache both color and image
             color_cache[color_cache_key] = card.color
             image_cache[image_cache_key] = card.image_url
+
+        if on_progress:
+            on_progress(i + 1, total, card.card_name, status)
 
     if failed_lookups:
         print(f"\n  Warning: {len(failed_lookups)} cards could not be found on Scryfall:")
@@ -790,8 +807,16 @@ def fetch_colors_from_scryfall(cards: list[Card]) -> list[Card]:
     return cards
 
 
-def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
+def generate_html(cards: list[Card], output_path: str = None, order_number: str = ""):
     """Generate an HTML page organized by color and rarity."""
+    import hashlib
+
+    # Create a unique generation ID from the card data so progress resets on new orders
+    card_fingerprint = "|".join(
+        f"{c.card_name}-{c.set_name}-{c.collector_number}-{c.quantity}"
+        for c in sorted(cards, key=lambda c: c.card_name)
+    )
+    generation_id = hashlib.md5(card_fingerprint.encode()).hexdigest()[:12]
 
     # Group cards by color, then by rarity
     organized = defaultdict(lambda: defaultdict(list))
@@ -1342,21 +1367,34 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
             updateSectionProgress();
         }}
 
-        // Restore checked state on load
-        document.querySelectorAll('.card-item').forEach((item) => {{
-            const index = item.dataset.index;
-            if (localStorage.getItem('card-' + index) === 'checked') {{
-                item.classList.add('checked');
-            }}
-        }});
+        // Auto-reset progress when a new order is loaded
+        const generationId = '{generation_id}';
+        if (localStorage.getItem('generation-id') !== generationId) {{
+            // New order detected — clear all old progress
+            document.querySelectorAll('.card-item').forEach((item) => {{
+                localStorage.removeItem('card-' + item.dataset.index);
+            }});
+            document.querySelectorAll('.color-section').forEach((section) => {{
+                localStorage.removeItem('section-' + section.id + '-collapsed');
+            }});
+            localStorage.setItem('generation-id', generationId);
+        }} else {{
+            // Same order — restore checked state
+            document.querySelectorAll('.card-item').forEach((item) => {{
+                const index = item.dataset.index;
+                if (localStorage.getItem('card-' + index) === 'checked') {{
+                    item.classList.add('checked');
+                }}
+            }});
 
-        // Restore collapsed state on load
-        document.querySelectorAll('.color-section').forEach((section) => {{
-            const sectionId = section.id;
-            if (localStorage.getItem('section-' + sectionId + '-collapsed') === 'true') {{
-                section.classList.add('collapsed');
-            }}
-        }});
+            // Restore collapsed state
+            document.querySelectorAll('.color-section').forEach((section) => {{
+                const sectionId = section.id;
+                if (localStorage.getItem('section-' + sectionId + '-collapsed') === 'true') {{
+                    section.classList.add('collapsed');
+                }}
+            }});
+        }}
 
         updateProgress();
         updateSectionProgress();
@@ -1416,10 +1454,12 @@ def generate_html(cards: list[Card], output_path: str, order_number: str = ""):
 </html>
 """
 
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(html)
+    if output_path:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+        print(f"\nGenerated HTML: {output_path}")
 
-    print(f"\nGenerated HTML: {output_path}")
+    return html
 
 
 def main():
