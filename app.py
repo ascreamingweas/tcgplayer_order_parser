@@ -61,43 +61,37 @@ def index():
             }
             h1 { margin-bottom: 8px; }
             p.sub { color: #aaa; margin-top: 0; margin-bottom: 30px; }
-            .file-slots {
-                display: flex; gap: 14px; max-width: 620px; width: 100%;
+            .upload-area {
+                border: 2px dashed #444; border-radius: 12px;
+                padding: 40px 60px; text-align: center;
+                cursor: pointer; transition: border-color 0.2s;
+                max-width: 500px; width: 100%;
             }
-            .file-slot {
-                flex: 1; border: 2px dashed #444; border-radius: 12px;
-                padding: 24px 14px; text-align: center; cursor: pointer;
-                transition: border-color 0.2s, background 0.2s;
-                position: relative; min-height: 100px;
-                display: flex; flex-direction: column;
-                align-items: center; justify-content: center; gap: 6px;
+            .upload-area:hover, .upload-area.drag { border-color: #6c63ff; }
+            .upload-area input { display: none; }
+            .upload-area .label { font-size: 1.1em; color: #ccc; }
+            .upload-area .sublabel { font-size: 0.8em; color: #666; margin-top: 4px; }
+            .file-list { margin-top: 12px; text-align: left; font-size: 0.85em; }
+            .file-entry {
+                display: flex; align-items: center; gap: 8px;
+                padding: 6px 10px; background: rgba(108,99,255,0.1);
+                border-radius: 6px; margin-bottom: 4px;
             }
-            .file-slot:hover { border-color: #6c63ff; background: rgba(108,99,255,0.05); }
-            .file-slot.filled { border-style: solid; background: rgba(108,99,255,0.08); }
-            .file-slot.filled .slot-label { display: none; }
-            .file-slot:not(.filled) .slot-file,
-            .file-slot:not(.filled) .slot-remove { display: none; }
-            .file-slot input { display: none; }
-            .slot-label { font-size: 0.9em; color: #888; }
-            .slot-file { font-size: 0.85em; color: #6c63ff; word-break: break-all; font-weight: 600; }
-            .slot-remove {
-                position: absolute; top: 6px; right: 8px;
-                color: #888; font-size: 1.2em; cursor: pointer;
+            .file-entry .file-name {
+                flex: 1; color: #6c63ff; font-weight: 600; word-break: break-all;
+            }
+            .file-entry .file-remove {
+                color: #888; cursor: pointer; font-size: 1.1em;
                 width: 22px; height: 22px; display: flex;
                 align-items: center; justify-content: center;
                 border-radius: 50%; transition: background 0.2s;
             }
-            .slot-remove:hover { background: rgba(255,255,255,0.1); color: #ff6b6b; }
-            .slot-group {
-                position: absolute; bottom: 6px; right: 8px;
-                font-size: 0.7em; font-weight: 700; color: #555;
+            .file-entry .file-remove:hover { background: rgba(255,255,255,0.1); color: #ff6b6b; }
+            .file-entry .file-group {
+                font-size: 0.7em; font-weight: 700; color: #fff;
                 width: 20px; height: 20px; border-radius: 50%;
-                display: flex; align-items: center; justify-content: center;
+                display: flex; align-items: center; justify-content: center; flex-shrink: 0;
             }
-            #slot0 .slot-group { background: rgba(74,158,255,0.3); color: #4a9eff; }
-            #slot1 .slot-group { background: rgba(255,152,0,0.3); color: #ff9800; }
-            #slot2 .slot-group { background: rgba(102,187,106,0.3); color: #66bb6a; }
-            .file-slot:not(.filled) .slot-group { display: none; }
             button {
                 margin-top: 20px; padding: 12px 40px;
                 background: #6c63ff; color: #fff; border: none;
@@ -173,30 +167,12 @@ def index():
         <h1>MTG Packing Slip Organizer</h1>
         <p class="sub">Upload a TCGplayer packing slip PDF to generate an organized pull sheet</p>
 
-        <div class="file-slots" id="fileSlots">
-            <div class="file-slot" id="slot0" onclick="addFile(0)">
-                <input type="file" accept=".pdf" onchange="handleSlotFile(0, this)">
-                <div class="slot-label">PDF 1</div>
-                <div class="slot-file"></div>
-                <div class="slot-remove" onclick="removeFile(event, 0)">&times;</div>
-                <div class="slot-group">A</div>
-            </div>
-            <div class="file-slot" id="slot1" onclick="addFile(1)">
-                <input type="file" accept=".pdf" onchange="handleSlotFile(1, this)">
-                <div class="slot-label">PDF 2 (optional)</div>
-                <div class="slot-file"></div>
-                <div class="slot-remove" onclick="removeFile(event, 1)">&times;</div>
-                <div class="slot-group">B</div>
-            </div>
-            <div class="file-slot" id="slot2" onclick="addFile(2)">
-                <input type="file" accept=".pdf" onchange="handleSlotFile(2, this)">
-                <div class="slot-label">PDF 3 (optional)</div>
-                <div class="slot-file"></div>
-                <div class="slot-remove" onclick="removeFile(event, 2)">&times;</div>
-                <div class="slot-group">C</div>
-            </div>
+        <div class="upload-area" id="dropZone">
+            <input type="file" id="fileInput" accept=".pdf" multiple>
+            <div class="label">Drop packing slip PDFs here or click to browse</div>
+            <div class="sublabel">Upload up to 3 for a multi-order pull sheet</div>
+            <div class="file-list" id="fileList"></div>
         </div>
-        <p class="sub" style="margin-top: 12px; font-size: 0.85em;">Upload 1 PDF for a single order, or up to 3 to merge into a multi-order pull sheet</p>
 
         <button id="submitBtn" disabled>Generate Pull Sheet</button>
 
@@ -229,58 +205,75 @@ def index():
             const procText = document.getElementById('procText');
             const procDetail = document.getElementById('procDetail');
 
-            // Multi-file slot management
-            const slotFiles = [null, null, null];
+            // Multi-file management
+            const MAX_FILES = 3;
+            const GROUP_COLORS = ['#4a9eff', '#ff9800', '#66bb6a'];
+            const GROUP_LABELS = ['A', 'B', 'C'];
+            let selectedFiles = [];
 
-            function addFile(idx) {
-                const slot = document.getElementById('slot' + idx);
-                slot.querySelector('input').click();
-            }
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+            const fileList = document.getElementById('fileList');
 
-            function handleSlotFile(idx, input) {
-                const file = input.files[0];
-                if (!file) return;
-                if (!file.name.toLowerCase().endsWith('.pdf')) {
-                    status.textContent = 'Please select a PDF file.';
-                    status.className = 'status error';
-                    return;
+            function addFiles(newFiles) {
+                for (const file of newFiles) {
+                    if (selectedFiles.length >= MAX_FILES) {
+                        status.textContent = `Maximum ${MAX_FILES} PDFs allowed.`;
+                        status.className = 'status error';
+                        break;
+                    }
+                    if (!file.name.toLowerCase().endsWith('.pdf')) {
+                        status.textContent = 'Please select PDF files only.';
+                        status.className = 'status error';
+                        continue;
+                    }
+                    selectedFiles.push(file);
                 }
-                slotFiles[idx] = file;
-                const slot = document.getElementById('slot' + idx);
-                slot.classList.add('filled');
-                slot.querySelector('.slot-file').textContent = file.name;
+                renderFileList();
+                fileInput.value = '';
                 status.textContent = '';
                 status.className = 'status';
-                updateSubmitState();
+                submitBtn.disabled = selectedFiles.length === 0;
             }
 
-            function removeFile(e, idx) {
-                e.stopPropagation();
-                slotFiles[idx] = null;
-                const slot = document.getElementById('slot' + idx);
-                slot.classList.remove('filled');
-                slot.querySelector('.slot-file').textContent = '';
-                slot.querySelector('input').value = '';
-                updateSubmitState();
+            function removeFile(idx) {
+                selectedFiles.splice(idx, 1);
+                renderFileList();
+                submitBtn.disabled = selectedFiles.length === 0;
             }
 
-            function updateSubmitState() {
-                submitBtn.disabled = !slotFiles.some(f => f !== null);
-            }
-
-            // Drag and drop on individual slots
-            document.querySelectorAll('.file-slot').forEach((slot, idx) => {
-                slot.addEventListener('dragover', e => { e.preventDefault(); slot.style.borderColor = '#6c63ff'; });
-                slot.addEventListener('dragleave', () => { slot.style.borderColor = ''; });
-                slot.addEventListener('drop', e => {
-                    e.preventDefault();
-                    slot.style.borderColor = '';
-                    if (e.dataTransfer.files.length) {
-                        const input = slot.querySelector('input');
-                        input.files = e.dataTransfer.files;
-                        handleSlotFile(idx, input);
-                    }
+            function renderFileList() {
+                if (selectedFiles.length === 0) { fileList.innerHTML = ''; return; }
+                fileList.innerHTML = selectedFiles.map((f, i) => {
+                    const showGroup = selectedFiles.length > 1;
+                    const groupBadge = showGroup
+                        ? `<span class="file-group" style="background:${GROUP_COLORS[i]}">${GROUP_LABELS[i]}</span>`
+                        : '';
+                    return `<div class="file-entry">
+                        ${groupBadge}
+                        <span class="file-name">${f.name}</span>
+                        <span class="file-remove" data-idx="${i}">&times;</span>
+                    </div>`;
+                }).join('');
+                fileList.querySelectorAll('.file-remove').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        removeFile(parseInt(btn.dataset.idx));
+                    });
                 });
+            }
+
+            dropZone.addEventListener('click', (e) => {
+                if (e.target.closest('.file-remove')) return;
+                fileInput.click();
+            });
+            fileInput.addEventListener('change', () => { if (fileInput.files.length) addFiles(fileInput.files); });
+            dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+            dropZone.addEventListener('drop', e => {
+                e.preventDefault();
+                dropZone.classList.remove('drag');
+                if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
             });
 
             // --- Set status ---
@@ -326,8 +319,7 @@ def index():
 
             // --- Upload + SSE progress ---
             submitBtn.addEventListener('click', async () => {
-                const activeFiles = slotFiles.filter(f => f !== null);
-                if (!activeFiles.length) return;
+                if (!selectedFiles.length) return;
                 submitBtn.disabled = true;
                 status.textContent = '';
                 status.className = 'status';
@@ -335,12 +327,12 @@ def index():
                 // Show progress bar
                 processing.classList.add('active');
                 procFill.style.width = '0%';
-                procText.textContent = activeFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
+                procText.textContent = selectedFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
                 procDetail.textContent = '';
 
                 // Step 1: Upload the files
                 const form = new FormData();
-                activeFiles.forEach(f => form.append('files', f));
+                selectedFiles.forEach(f => form.append('files', f));
                 let jobId;
 
                 try {
