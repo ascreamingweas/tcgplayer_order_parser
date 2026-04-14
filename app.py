@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from threading import Thread
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
@@ -61,16 +61,43 @@ def index():
             }
             h1 { margin-bottom: 8px; }
             p.sub { color: #aaa; margin-top: 0; margin-bottom: 30px; }
-            .upload-area {
-                border: 2px dashed #444; border-radius: 12px;
-                padding: 40px 60px; text-align: center;
-                cursor: pointer; transition: border-color 0.2s;
-                max-width: 500px; width: 100%;
+            .file-slots {
+                display: flex; gap: 14px; max-width: 620px; width: 100%;
             }
-            .upload-area:hover, .upload-area.drag { border-color: #6c63ff; }
-            .upload-area input { display: none; }
-            .upload-area .label { font-size: 1.1em; color: #ccc; }
-            .upload-area .filename { color: #6c63ff; margin-top: 10px; }
+            .file-slot {
+                flex: 1; border: 2px dashed #444; border-radius: 12px;
+                padding: 24px 14px; text-align: center; cursor: pointer;
+                transition: border-color 0.2s, background 0.2s;
+                position: relative; min-height: 100px;
+                display: flex; flex-direction: column;
+                align-items: center; justify-content: center; gap: 6px;
+            }
+            .file-slot:hover { border-color: #6c63ff; background: rgba(108,99,255,0.05); }
+            .file-slot.filled { border-style: solid; background: rgba(108,99,255,0.08); }
+            .file-slot.filled .slot-label { display: none; }
+            .file-slot:not(.filled) .slot-file,
+            .file-slot:not(.filled) .slot-remove { display: none; }
+            .file-slot input { display: none; }
+            .slot-label { font-size: 0.9em; color: #888; }
+            .slot-file { font-size: 0.85em; color: #6c63ff; word-break: break-all; font-weight: 600; }
+            .slot-remove {
+                position: absolute; top: 6px; right: 8px;
+                color: #888; font-size: 1.2em; cursor: pointer;
+                width: 22px; height: 22px; display: flex;
+                align-items: center; justify-content: center;
+                border-radius: 50%; transition: background 0.2s;
+            }
+            .slot-remove:hover { background: rgba(255,255,255,0.1); color: #ff6b6b; }
+            .slot-group {
+                position: absolute; bottom: 6px; right: 8px;
+                font-size: 0.7em; font-weight: 700; color: #555;
+                width: 20px; height: 20px; border-radius: 50%;
+                display: flex; align-items: center; justify-content: center;
+            }
+            #slot0 .slot-group { background: rgba(74,158,255,0.3); color: #4a9eff; }
+            #slot1 .slot-group { background: rgba(255,152,0,0.3); color: #ff9800; }
+            #slot2 .slot-group { background: rgba(102,187,106,0.3); color: #66bb6a; }
+            .file-slot:not(.filled) .slot-group { display: none; }
             button {
                 margin-top: 20px; padding: 12px 40px;
                 background: #6c63ff; color: #fff; border: none;
@@ -146,11 +173,30 @@ def index():
         <h1>MTG Packing Slip Organizer</h1>
         <p class="sub">Upload a TCGplayer packing slip PDF to generate an organized pull sheet</p>
 
-        <div class="upload-area" id="dropZone">
-            <input type="file" id="fileInput" accept=".pdf">
-            <div class="label">Drop a PDF here or click to browse</div>
-            <div class="filename" id="fileName"></div>
+        <div class="file-slots" id="fileSlots">
+            <div class="file-slot" id="slot0" onclick="addFile(0)">
+                <input type="file" accept=".pdf" onchange="handleSlotFile(0, this)">
+                <div class="slot-label">PDF 1</div>
+                <div class="slot-file"></div>
+                <div class="slot-remove" onclick="removeFile(event, 0)">&times;</div>
+                <div class="slot-group">A</div>
+            </div>
+            <div class="file-slot" id="slot1" onclick="addFile(1)">
+                <input type="file" accept=".pdf" onchange="handleSlotFile(1, this)">
+                <div class="slot-label">PDF 2 (optional)</div>
+                <div class="slot-file"></div>
+                <div class="slot-remove" onclick="removeFile(event, 1)">&times;</div>
+                <div class="slot-group">B</div>
+            </div>
+            <div class="file-slot" id="slot2" onclick="addFile(2)">
+                <input type="file" accept=".pdf" onchange="handleSlotFile(2, this)">
+                <div class="slot-label">PDF 3 (optional)</div>
+                <div class="slot-file"></div>
+                <div class="slot-remove" onclick="removeFile(event, 2)">&times;</div>
+                <div class="slot-group">C</div>
+            </div>
         </div>
+        <p class="sub" style="margin-top: 12px; font-size: 0.85em;">Upload 1 PDF for a single order, or up to 3 to merge into a multi-order pull sheet</p>
 
         <button id="submitBtn" disabled>Generate Pull Sheet</button>
 
@@ -176,9 +222,6 @@ def index():
         </div>
 
         <script>
-            const dropZone = document.getElementById('dropZone');
-            const fileInput = document.getElementById('fileInput');
-            const fileName = document.getElementById('fileName');
             const submitBtn = document.getElementById('submitBtn');
             const status = document.getElementById('status');
             const processing = document.getElementById('processing');
@@ -186,32 +229,59 @@ def index():
             const procText = document.getElementById('procText');
             const procDetail = document.getElementById('procDetail');
 
-            dropZone.addEventListener('click', () => fileInput.click());
-            dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
-            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
-            dropZone.addEventListener('drop', e => {
-                e.preventDefault();
-                dropZone.classList.remove('drag');
-                if (e.dataTransfer.files.length) {
-                    fileInput.files = e.dataTransfer.files;
-                    handleFile(e.dataTransfer.files[0]);
-                }
-            });
-            fileInput.addEventListener('change', () => {
-                if (fileInput.files.length) handleFile(fileInput.files[0]);
-            });
+            // Multi-file slot management
+            const slotFiles = [null, null, null];
 
-            function handleFile(file) {
+            function addFile(idx) {
+                const slot = document.getElementById('slot' + idx);
+                slot.querySelector('input').click();
+            }
+
+            function handleSlotFile(idx, input) {
+                const file = input.files[0];
+                if (!file) return;
                 if (!file.name.toLowerCase().endsWith('.pdf')) {
                     status.textContent = 'Please select a PDF file.';
                     status.className = 'status error';
                     return;
                 }
-                fileName.textContent = file.name;
-                submitBtn.disabled = false;
+                slotFiles[idx] = file;
+                const slot = document.getElementById('slot' + idx);
+                slot.classList.add('filled');
+                slot.querySelector('.slot-file').textContent = file.name;
                 status.textContent = '';
                 status.className = 'status';
+                updateSubmitState();
             }
+
+            function removeFile(e, idx) {
+                e.stopPropagation();
+                slotFiles[idx] = null;
+                const slot = document.getElementById('slot' + idx);
+                slot.classList.remove('filled');
+                slot.querySelector('.slot-file').textContent = '';
+                slot.querySelector('input').value = '';
+                updateSubmitState();
+            }
+
+            function updateSubmitState() {
+                submitBtn.disabled = !slotFiles.some(f => f !== null);
+            }
+
+            // Drag and drop on individual slots
+            document.querySelectorAll('.file-slot').forEach((slot, idx) => {
+                slot.addEventListener('dragover', e => { e.preventDefault(); slot.style.borderColor = '#6c63ff'; });
+                slot.addEventListener('dragleave', () => { slot.style.borderColor = ''; });
+                slot.addEventListener('drop', e => {
+                    e.preventDefault();
+                    slot.style.borderColor = '';
+                    if (e.dataTransfer.files.length) {
+                        const input = slot.querySelector('input');
+                        input.files = e.dataTransfer.files;
+                        handleSlotFile(idx, input);
+                    }
+                });
+            });
 
             // --- Set status ---
             async function loadSetStatus() {
@@ -256,8 +326,8 @@ def index():
 
             // --- Upload + SSE progress ---
             submitBtn.addEventListener('click', async () => {
-                const file = fileInput.files[0];
-                if (!file) return;
+                const activeFiles = slotFiles.filter(f => f !== null);
+                if (!activeFiles.length) return;
                 submitBtn.disabled = true;
                 status.textContent = '';
                 status.className = 'status';
@@ -265,12 +335,12 @@ def index():
                 // Show progress bar
                 processing.classList.add('active');
                 procFill.style.width = '0%';
-                procText.textContent = 'Uploading PDF...';
+                procText.textContent = activeFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
                 procDetail.textContent = '';
 
-                // Step 1: Upload the file
+                // Step 1: Upload the files
                 const form = new FormData();
-                form.append('file', file);
+                activeFiles.forEach(f => form.append('files', f));
                 let jobId;
 
                 try {
@@ -383,47 +453,67 @@ def refresh_sets():
 
 
 @app.post("/api/parse")
-async def parse_pdf(file: UploadFile = File(...)):
-    """Accept a packing slip PDF, start processing, and return a job ID for progress tracking."""
+async def parse_pdf(files: list[UploadFile] = File(...)):
+    """Accept up to 3 packing slip PDFs, start processing, and return a job ID for progress tracking."""
 
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="File must be a PDF.")
+    if len(files) > 3:
+        raise HTTPException(status_code=400, detail="Maximum 3 PDFs supported.")
 
-    contents = await file.read()
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File too large (max 10 MB).")
+    group_labels = ['A', 'B', 'C']
+    is_multi = len(files) > 1
+    all_cards = []
+    order_numbers = {}
 
-    # Write to a temp file so pdfplumber can read it
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    tmp.write(contents)
-    tmp.close()
-    tmp_path = tmp.name
+    for idx, file in enumerate(files):
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' must be a PDF.")
 
-    try:
-        # Parse the PDF (fast — no network calls)
-        cards = parse_packing_slip(tmp_path)
-        if not cards:
+        contents = await file.read()
+        if len(contents) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' too large (max 10 MB).")
+
+        # Write to a temp file so pdfplumber can read it
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp.write(contents)
+        tmp.close()
+        tmp_path = tmp.name
+
+        try:
+            cards = parse_packing_slip(tmp_path)
+
+            # Extract order number
+            text = extract_text_from_pdf(tmp_path)
+            order_match = re.search(r"Order\s*Number:\s*([A-Z0-9-]+)", text)
+            order_num = order_match.group(1) if order_match else ""
+        finally:
             Path(tmp_path).unlink(missing_ok=True)
+
+        if not cards:
             raise HTTPException(
                 status_code=422,
-                detail="No cards found in the PDF. Please check the file format.",
+                detail=f"No cards found in '{file.filename}'. Please check the file format.",
             )
 
-        # Extract order number
-        text = extract_text_from_pdf(tmp_path)
-        order_match = re.search(r"Order\s*Number:\s*([A-Z0-9-]+)", text)
-        order_number = order_match.group(1) if order_match else ""
+        # Assign order group for multi-order
+        group = group_labels[idx] if is_multi else None
+        if group:
+            for card in cards:
+                card.order_group = group
+            order_numbers[group] = order_num
+        else:
+            order_numbers[''] = order_num
 
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        all_cards.extend(cards)
 
     # Create a job for the slow Scryfall lookup phase
     job_id = uuid.uuid4().hex[:12]
+    order_label = "Multi-Order Pull Sheet" if is_multi else order_numbers.get('', '')
     _jobs[job_id] = {
         "status": "processing",
-        "cards": cards,
-        "order_number": order_number,
-        "progress": [],  # list of progress events
+        "cards": all_cards,
+        "order_number": order_label,
+        "order_numbers": order_numbers if is_multi else None,
+        "progress": [],
         "result_html": None,
         "error": None,
     }
@@ -441,7 +531,11 @@ async def parse_pdf(file: UploadFile = File(...)):
                 })
 
             fetch_colors_from_scryfall(job["cards"], on_progress=on_progress)
-            html = generate_html(job["cards"], order_number=job["order_number"])
+            html = generate_html(
+                job["cards"],
+                order_number=job["order_number"],
+                order_numbers=job["order_numbers"],
+            )
             job["result_html"] = html
             job["status"] = "complete"
         except Exception as e:
@@ -450,7 +544,7 @@ async def parse_pdf(file: UploadFile = File(...)):
 
     Thread(target=_process, daemon=True).start()
 
-    return {"job_id": job_id, "card_count": len(cards)}
+    return {"job_id": job_id, "card_count": len(all_cards), "order_count": len(files)}
 
 
 @app.get("/api/parse/{job_id}/progress")

@@ -1,8 +1,11 @@
 # TCGplayer Packing Slip Organizer
 # Makefile for common operations
 
-# Input PDF path (can be anywhere on disk)
+# Input PDF path(s) — space-separated for multi-order (max 3)
 PDF ?=
+# Additional PDFs for multi-order pull sheets (optional)
+PDF2 ?=
+PDF3 ?=
 # Output filename (optional, auto-generated from PDF name if not specified)
 OUTPUT ?=
 
@@ -27,8 +30,8 @@ help: ## Show this help message
 	@echo ""
 	@echo "Examples:"
 	@echo "  make run PDF=~/Downloads/TCGplayer_PackingSlips.pdf"
-	@echo "  make run PDF=/Users/me/Documents/orders/packing_slip.pdf"
 	@echo "  make run PDF=~/Downloads/slip.pdf OUTPUT=my_orders.html"
+	@echo "  make run PDF=order1.pdf PDF2=order2.pdf PDF3=order3.pdf  (multi-order)"
 	@echo ""
 	@echo "Output files are saved to: ./$(OUTPUT_DIR)/"
 
@@ -66,7 +69,16 @@ run: $(OUTPUT_DIR) ## Process a packing slip PDF (requires PDF=<path>)
 	else \
 		OUTPUT_FILE="$(OUTPUT_DIR)/$(OUTPUT)"; \
 	fi; \
-	$(PYTHON) mtg_packing_slip_organizer.py "$$EXPANDED_PDF" "$$OUTPUT_FILE"
+	EXTRA_PDFS=""; \
+	if [ -n "$(PDF2)" ]; then \
+		EXPANDED_PDF2=$$(eval echo "$(PDF2)"); \
+		EXTRA_PDFS="$$EXTRA_PDFS \"$$EXPANDED_PDF2\""; \
+	fi; \
+	if [ -n "$(PDF3)" ]; then \
+		EXPANDED_PDF3=$$(eval echo "$(PDF3)"); \
+		EXTRA_PDFS="$$EXTRA_PDFS \"$$EXPANDED_PDF3\""; \
+	fi; \
+	$(PYTHON) mtg_packing_slip_organizer.py "$$EXPANDED_PDF" $$EXTRA_PDFS -o "$$OUTPUT_FILE"
 
 list: ## List generated HTML files in output folder
 	@echo "Generated HTML files in $(OUTPUT_DIR)/:"

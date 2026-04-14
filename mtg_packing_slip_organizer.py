@@ -40,11 +40,44 @@ class Card:
     language: Optional[str] = None  # Non-English language if applicable
     color: str = "Colorless"  # Will be populated from Scryfall
     image_url: Optional[str] = None  # Scryfall card image URL
+    order_group: Optional[str] = None  # 'A', 'B', or 'C' for multi-order pulls
 
 
 # Rarity mapping
 RARITY_ORDER = {"M": 0, "R": 1, "U": 2, "C": 3, "S": 4}
 RARITY_NAMES = {"M": "Mythic Rare", "R": "Rare", "U": "Uncommon", "C": "Common", "S": "Special"}
+
+# Order group colors for multi-order pull sheets (max 3 concurrent orders)
+ORDER_GROUP_COLORS = {
+    'A': '#4a9eff',  # blue
+    'B': '#ff9800',  # orange
+    'C': '#66bb6a',  # green
+}
+
+# Variant/border treatment styling — maps lowercase keyword to (css_class, label, color)
+VARIANT_STYLES = {
+    'borderless': ('variant-borderless', 'Borderless', '#00bcd4'),
+    'extended art': ('variant-extended', 'Extended Art', '#9c27b0'),
+    'showcase': ('variant-showcase', 'Showcase', '#e91e63'),
+    'retro frame': ('variant-retro', 'Retro Frame', '#ff8f00'),
+    'white border': ('variant-white-border', 'White Border', '#b0bec5'),
+    'foil etched': ('variant-etched', 'Foil Etched', '#b8860b'),
+    'full art': ('variant-full-art', 'Full Art', '#3f51b5'),
+    'future sight': ('variant-future-sight', 'Future Sight', '#00e5ff'),
+    'surge foil': ('variant-surge', 'Surge Foil', '#ff6f00'),
+}
+
+
+def get_variant_style(variant: Optional[str]) -> tuple[str, str, str]:
+    """Return (css_class, label, color) for a variant, or a generic fallback."""
+    if not variant:
+        return ('', '', '')
+    lower = variant.lower()
+    for key, style in VARIANT_STYLES.items():
+        if key in lower:
+            return style
+    # Generic fallback for unknown variants
+    return ('variant-other', variant, '#78909c')
 
 # Color order for sorting (WUBRG + multicolor + colorless + land)
 COLOR_ORDER = {
@@ -807,7 +840,8 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     return cards
 
 
-def generate_html(cards: list[Card], output_path: str = None, order_number: str = ""):
+def generate_html(cards: list[Card], output_path: str = None, order_number: str = "",
+                   order_numbers: dict[str, str] = None):
     """Generate an HTML page organized by color and rarity."""
     import hashlib
 
@@ -817,6 +851,12 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         for c in sorted(cards, key=lambda c: c.card_name)
     )
     generation_id = hashlib.md5(card_fingerprint.encode()).hexdigest()[:12]
+
+    # Detect multi-order mode
+    active_groups = sorted(set(c.order_group for c in cards if c.order_group))
+    is_multi_order = len(active_groups) > 1
+    if not order_numbers:
+        order_numbers = {}
 
     # Group cards by color, then by rarity
     organized = defaultdict(lambda: defaultdict(list))
@@ -1006,6 +1046,77 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             font-weight: bold;
             font-size: 0.9em;
         }}
+        .card-variant {{
+            font-size: 0.75em;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 4px;
+            margin-left: 6px;
+            display: inline-block;
+            vertical-align: middle;
+            letter-spacing: 0.02em;
+        }}
+        .variant-borderless {{ background: rgba(0,188,212,0.2); color: #00bcd4; }}
+        .variant-extended {{ background: rgba(156,39,176,0.2); color: #ce93d8; }}
+        .variant-showcase {{ background: rgba(233,30,99,0.2); color: #f48fb1; }}
+        .variant-retro {{ background: rgba(255,143,0,0.2); color: #ffb74d; }}
+        .variant-white-border {{ background: rgba(176,190,197,0.2); color: #b0bec5; }}
+        .variant-etched {{ background: rgba(184,134,11,0.2); color: #daa520; }}
+        .variant-full-art {{ background: rgba(63,81,181,0.2); color: #7986cb; }}
+        .variant-future-sight {{ background: rgba(0,229,255,0.2); color: #00e5ff; }}
+        .variant-surge {{ background: rgba(255,111,0,0.2); color: #ff9800; }}
+        .variant-other {{ background: rgba(120,144,156,0.2); color: #90a4ae; }}
+        .card-item.has-variant {{
+            border-left: 3px solid var(--variant-color, #78909c);
+        }}
+        /* Order group pill */
+        .order-pill {{
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.8em;
+            color: #fff;
+            flex-shrink: 0;
+        }}
+        .order-pill-A {{ background: #4a9eff; }}
+        .order-pill-B {{ background: #ff9800; }}
+        .order-pill-C {{ background: #66bb6a; }}
+        .card-item.multi-order {{
+            grid-template-columns: 30px 40px 1fr auto;
+            border-left: 3px solid var(--group-color, transparent);
+        }}
+        .card-item.multi-order.has-variant {{
+            border-left: 3px solid var(--variant-color, #78909c);
+            border-right: 3px solid var(--group-color, transparent);
+        }}
+        /* Order group legend */
+        .order-legend {{
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }}
+        .order-legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #16213e;
+            padding: 10px 18px;
+            border-radius: 8px;
+        }}
+        .order-legend-label {{
+            color: #ccc;
+            font-size: 0.9em;
+        }}
+        .order-legend-number {{
+            color: #888;
+            font-size: 0.8em;
+        }}
         .card-price {{
             text-align: right;
             color: #4caf50;
@@ -1182,6 +1293,18 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             <div class="label">Line Items</div>
         </div>
     </div>
+{"".join(f'''
+    <div class="order-legend">
+''' + "".join(f'''        <div class="order-legend-item">
+            <div class="order-pill order-pill-{g}">{g}</div>
+            <div>
+                <div class="order-legend-label">Order {g}</div>
+                <div class="order-legend-number">{order_numbers.get(g, '')}</div>
+            </div>
+            <div class="order-legend-label">({sum(1 for c in cards if c.order_group == g)} items)</div>
+        </div>
+''' for g in active_groups) + '''    </div>
+''') if is_multi_order else ''}
 
     <nav class="nav">
         <div class="nav-links">
@@ -1222,11 +1345,11 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 """
 
         for rarity in sorted_rarities:
-            # Sort cards: variants (non-traditional borders) first, then by card name
-            # This groups special printings together at the top for easier pulling
+            # Sort cards: variants first, then by card name, then by order group
+            # This keeps duplicate cards from different orders adjacent
             rarity_cards = sorted(
                 color_cards[rarity],
-                key=lambda c: (0 if c.variant else 1, c.card_name)
+                key=lambda c: (0 if c.variant else 1, c.card_name, c.order_group or '')
             )
             rarity_name = RARITY_NAMES.get(rarity, rarity)
 
@@ -1238,18 +1361,52 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
             for card in rarity_cards:
                 foil_badge = '<span class="card-foil"> ★ FOIL</span>' if card.is_foil else ''
-                variant_text = f" ({card.variant})" if card.variant else ""
                 language_badge = f'<span class="card-language"> [{card.language}]</span>' if card.language else ''
                 image_attr = f' data-image="{card.image_url}"' if card.image_url else ''
+
+                # Variant badge
+                variant_css, variant_label, variant_color = get_variant_style(card.variant)
+                if variant_css:
+                    variant_badge = f'<span class="card-variant {variant_css}">{variant_label}</span>'
+                    variant_style = f' style="--variant-color: {variant_color}"'
+                    variant_class = ' has-variant'
+                else:
+                    variant_badge = ''
+                    variant_style = ''
+                    variant_class = ''
+
+                # Order group pill (only in multi-order mode)
+                if is_multi_order and card.order_group:
+                    group = card.order_group
+                    group_color = ORDER_GROUP_COLORS.get(group, '#888')
+                    order_pill = f'<div class="order-pill order-pill-{group}">{group}</div>'
+                    multi_class = ' multi-order'
+                    group_style = f' --group-color: {group_color};'
+                    data_group = f' data-group="{group}"'
+                else:
+                    order_pill = ''
+                    multi_class = ''
+                    group_style = ''
+                    data_group = ''
+
+                # Combine inline styles
+                combined_style = ''
+                if variant_style or group_style:
+                    style_parts = []
+                    if variant_color:
+                        style_parts.append(f'--variant-color: {variant_color}')
+                    if group_style:
+                        style_parts.append(group_style.strip().rstrip(';'))
+                    combined_style = f' style="{"; ".join(style_parts)}"'
 
                 # Escape HTML in card name
                 safe_card_name = card.card_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 safe_set_name = card.set_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-                html += f"""                <div class="card-item" data-index="{card_index}"{image_attr} onclick="toggleCard(this)">
-                    <div class="card-qty">{card.quantity}x</div>
+                html += f"""                <div class="card-item{variant_class}{multi_class}" data-index="{card_index}"{data_group}{image_attr}{combined_style} onclick="toggleCard(this)">
+                    {order_pill}<div class="card-qty">{card.quantity}x</div>
                     <div class="card-info">
-                        <div class="card-name">{safe_card_name}{variant_text}{foil_badge}{language_badge}</div>
+                        <div class="card-name">{safe_card_name}{variant_badge}{foil_badge}{language_badge}</div>
                         <div class="card-details">{safe_set_name} #{card.collector_number} - {card.condition}</div>
                     </div>
                     <div class="card-price">${card.total_price:.2f}</div>
@@ -1466,37 +1623,77 @@ def main():
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python mtg_packing_slip_organizer.py <packing_slip.pdf> [output.html]")
+        print("Usage: python mtg_packing_slip_organizer.py <slip1.pdf> [slip2.pdf] [slip3.pdf] [-o output.html]")
         print("\nThis tool parses TCGplayer packing slips and generates an HTML page")
         print("organized by card color and rarity for easier order fulfillment.")
+        print("Pass up to 3 PDFs to merge into a single multi-order pull sheet.")
         sys.exit(1)
 
-    pdf_path = sys.argv[1]
+    # Parse arguments: PDF files and optional -o output path
+    pdf_paths = []
+    output_path = None
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == '-o' and i + 1 < len(args):
+            output_path = args[i + 1]
+            i += 2
+        else:
+            pdf_paths.append(args[i])
+            i += 1
 
-    if not Path(pdf_path).exists():
-        print(f"Error: File not found: {pdf_path}")
+    if len(pdf_paths) > 3:
+        print("Error: Maximum 3 PDFs supported for multi-order pull sheets.")
         sys.exit(1)
 
-    # Default output path
-    output_path = sys.argv[2] if len(sys.argv) > 2 else pdf_path.rsplit('.', 1)[0] + '_organized.html'
+    # Validate all files exist
+    for p in pdf_paths:
+        if not Path(p).exists():
+            print(f"Error: File not found: {p}")
+            sys.exit(1)
 
-    # Parse the PDF
-    cards = parse_packing_slip(pdf_path)
+    if not output_path:
+        output_path = pdf_paths[0].rsplit('.', 1)[0] + '_organized.html'
 
-    if not cards:
-        print("No cards found in the PDF. Please check the file format.")
+    group_labels = ['A', 'B', 'C']
+    all_cards = []
+    order_numbers = {}
+    is_multi = len(pdf_paths) > 1
+
+    for idx, pdf_path in enumerate(pdf_paths):
+        group = group_labels[idx] if is_multi else None
+        if is_multi:
+            print(f"\n--- Order {group} ---")
+
+        cards = parse_packing_slip(pdf_path)
+        if not cards:
+            print(f"Warning: No cards found in {pdf_path}")
+            continue
+
+        # Assign order group
+        if group:
+            for card in cards:
+                card.order_group = group
+
+        # Extract order number
+        text = extract_text_from_pdf(pdf_path)
+        order_match = re.search(r"Order\s*Number:\s*([A-Z0-9-]+)", text)
+        order_num = order_match.group(1) if order_match else ""
+        if group:
+            order_numbers[group] = order_num
+
+        all_cards.extend(cards)
+
+    if not all_cards:
+        print("No cards found in any PDF. Please check the file formats.")
         sys.exit(1)
 
     # Fetch colors from Scryfall
-    cards = fetch_colors_from_scryfall(cards)
-
-    # Extract order number from PDF text
-    text = extract_text_from_pdf(pdf_path)
-    order_match = re.search(r"Order\s*Number:\s*([A-Z0-9-]+)", text)
-    order_number = order_match.group(1) if order_match else ""
+    all_cards = fetch_colors_from_scryfall(all_cards)
 
     # Generate HTML
-    generate_html(cards, output_path, order_number)
+    order_label = order_numbers.get('A', '') if not is_multi else "Multi-Order Pull Sheet"
+    generate_html(all_cards, output_path, order_label, order_numbers=order_numbers if is_multi else None)
 
     print(f"\nDone! Open {output_path} in your browser.")
 

@@ -13,29 +13,51 @@
       margin: 0 auto;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
-    #mtg-organizer .upload-area {
-      border: 2px dashed #666;
-      border-radius: 12px;
-      padding: 40px 20px;
-      text-align: center;
-      cursor: pointer;
+    #mtg-organizer .file-slots {
+      display: flex; gap: 10px;
+    }
+    #mtg-organizer .file-slot {
+      flex: 1; border: 2px dashed #999; border-radius: 12px;
+      padding: 20px 10px; text-align: center; cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
-      background: #f9f9f9;
+      background: #f9f9f9; position: relative;
+      min-height: 80px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 4px;
     }
-    #mtg-organizer .upload-area:hover,
-    #mtg-organizer .upload-area.drag {
-      border-color: #6c63ff;
-      background: #f0eeff;
+    #mtg-organizer .file-slot:hover {
+      border-color: #6c63ff; background: #f0eeff;
     }
-    #mtg-organizer .upload-area input { display: none; }
-    #mtg-organizer .upload-area .label {
-      font-size: 1.1em;
-      color: #555;
+    #mtg-organizer .file-slot.filled {
+      border-style: solid; background: #f0eeff;
     }
-    #mtg-organizer .upload-area .filename {
-      color: #6c63ff;
-      margin-top: 10px;
-      font-weight: 600;
+    #mtg-organizer .file-slot.filled .slot-label { display: none; }
+    #mtg-organizer .file-slot:not(.filled) .slot-file,
+    #mtg-organizer .file-slot:not(.filled) .slot-remove { display: none; }
+    #mtg-organizer .file-slot input { display: none; }
+    #mtg-organizer .slot-label { font-size: 0.85em; color: #888; }
+    #mtg-organizer .slot-file {
+      font-size: 0.8em; color: #6c63ff; word-break: break-all; font-weight: 600;
+    }
+    #mtg-organizer .slot-remove {
+      position: absolute; top: 4px; right: 6px;
+      color: #999; font-size: 1.1em; cursor: pointer;
+      width: 20px; height: 20px; display: flex;
+      align-items: center; justify-content: center;
+      border-radius: 50%; transition: background 0.2s;
+    }
+    #mtg-organizer .slot-remove:hover { background: #eee; color: #d32f2f; }
+    #mtg-organizer .slot-group {
+      position: absolute; bottom: 4px; right: 6px;
+      font-size: 0.65em; font-weight: 700;
+      width: 18px; height: 18px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #mtg-organizer .file-slot:nth-child(1) .slot-group { background: rgba(74,158,255,0.2); color: #4a9eff; }
+    #mtg-organizer .file-slot:nth-child(2) .slot-group { background: rgba(255,152,0,0.2); color: #ff9800; }
+    #mtg-organizer .file-slot:nth-child(3) .slot-group { background: rgba(102,187,106,0.2); color: #66bb6a; }
+    #mtg-organizer .file-slot:not(.filled) .slot-group { display: none; }
+    #mtg-organizer .slot-hint {
+      font-size: 0.75em; color: #aaa; margin-top: 8px; text-align: center;
     }
     #mtg-organizer button {
       display: block;
@@ -86,11 +108,30 @@
     }
   </style>
 
-  <div class="upload-area" id="mtgDropZone">
-    <input type="file" id="mtgFileInput" accept=".pdf">
-    <div class="label">Drop a TCGplayer packing slip PDF here, or click to browse</div>
-    <div class="filename" id="mtgFileName"></div>
+  <div class="file-slots" id="mtgFileSlots">
+    <div class="file-slot" id="mtgSlot0" onclick="mtgAddFile(0)">
+      <input type="file" accept=".pdf" onchange="mtgHandleSlotFile(0, this)">
+      <div class="slot-label">PDF 1</div>
+      <div class="slot-file"></div>
+      <div class="slot-remove" onclick="mtgRemoveFile(event, 0)">&times;</div>
+      <div class="slot-group">A</div>
+    </div>
+    <div class="file-slot" id="mtgSlot1" onclick="mtgAddFile(1)">
+      <input type="file" accept=".pdf" onchange="mtgHandleSlotFile(1, this)">
+      <div class="slot-label">PDF 2</div>
+      <div class="slot-file"></div>
+      <div class="slot-remove" onclick="mtgRemoveFile(event, 1)">&times;</div>
+      <div class="slot-group">B</div>
+    </div>
+    <div class="file-slot" id="mtgSlot2" onclick="mtgAddFile(2)">
+      <input type="file" accept=".pdf" onchange="mtgHandleSlotFile(2, this)">
+      <div class="slot-label">PDF 3</div>
+      <div class="slot-file"></div>
+      <div class="slot-remove" onclick="mtgRemoveFile(event, 2)">&times;</div>
+      <div class="slot-group">C</div>
+    </div>
   </div>
+  <div class="slot-hint">Upload 1 PDF or up to 3 for a multi-order pull sheet</div>
 
   <button id="mtgSubmitBtn" disabled>Generate Pull Sheet</button>
 
@@ -112,9 +153,6 @@
   const API_URL = 'https://tcgplayer-order-report.onrender.com';
   // ============================================================
 
-  const dropZone = document.getElementById('mtgDropZone');
-  const fileInput = document.getElementById('mtgFileInput');
-  const fileName = document.getElementById('mtgFileName');
   const submitBtn = document.getElementById('mtgSubmitBtn');
   const status = document.getElementById('mtgStatus');
   const processing = document.getElementById('mtgProcessing');
@@ -122,47 +160,68 @@
   const procText = document.getElementById('mtgProcText');
   const procDetail = document.getElementById('mtgProcDetail');
 
-  dropZone.addEventListener('click', () => fileInput.click());
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropZone.classList.remove('drag');
-    if (e.dataTransfer.files.length) {
-      fileInput.files = e.dataTransfer.files;
-      handleFile(e.dataTransfer.files[0]);
-    }
-  });
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files.length) handleFile(fileInput.files[0]);
-  });
+  const mtgSlotFiles = [null, null, null];
 
-  function handleFile(file) {
+  function mtgAddFile(idx) {
+    document.getElementById('mtgSlot' + idx).querySelector('input').click();
+  }
+
+  function mtgHandleSlotFile(idx, input) {
+    const file = input.files[0];
+    if (!file) return;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       status.textContent = 'Please select a PDF file.';
       status.className = 'status error';
       return;
     }
-    fileName.textContent = file.name;
-    submitBtn.disabled = false;
+    mtgSlotFiles[idx] = file;
+    const slot = document.getElementById('mtgSlot' + idx);
+    slot.classList.add('filled');
+    slot.querySelector('.slot-file').textContent = file.name;
     status.textContent = '';
     status.className = 'status';
+    submitBtn.disabled = !mtgSlotFiles.some(f => f !== null);
   }
 
+  function mtgRemoveFile(e, idx) {
+    e.stopPropagation();
+    mtgSlotFiles[idx] = null;
+    const slot = document.getElementById('mtgSlot' + idx);
+    slot.classList.remove('filled');
+    slot.querySelector('.slot-file').textContent = '';
+    slot.querySelector('input').value = '';
+    submitBtn.disabled = !mtgSlotFiles.some(f => f !== null);
+  }
+
+  // Drag and drop on individual slots
+  document.querySelectorAll('#mtg-organizer .file-slot').forEach((slot, idx) => {
+    slot.addEventListener('dragover', e => { e.preventDefault(); slot.style.borderColor = '#6c63ff'; });
+    slot.addEventListener('dragleave', () => { slot.style.borderColor = ''; });
+    slot.addEventListener('drop', e => {
+      e.preventDefault();
+      slot.style.borderColor = '';
+      if (e.dataTransfer.files.length) {
+        const input = slot.querySelector('input');
+        input.files = e.dataTransfer.files;
+        mtgHandleSlotFile(idx, input);
+      }
+    });
+  });
+
   submitBtn.addEventListener('click', async () => {
-    const file = fileInput.files[0];
-    if (!file) return;
+    const activeFiles = mtgSlotFiles.filter(f => f !== null);
+    if (!activeFiles.length) return;
     submitBtn.disabled = true;
     status.textContent = '';
     status.className = 'status';
 
     processing.classList.add('active');
     procFill.style.width = '0%';
-    procText.textContent = 'Uploading PDF...';
+    procText.textContent = activeFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
     procDetail.textContent = '';
 
     const form = new FormData();
-    form.append('file', file);
+    activeFiles.forEach(f => form.append('files', f));
     let jobId;
 
     try {
