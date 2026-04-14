@@ -1330,7 +1330,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                 <div class="order-legend-label">Order {g}</div>
                 <div class="order-legend-number">{order_numbers.get(g, '')}</div>
             </div>
-            <div class="order-legend-label">({sum(1 for c in cards if c.order_group == g)} items)</div>
+            <div class="order-legend-label">({sum(1 for c in cards if c.order_group == g)} items — ${sum(c.total_price for c in cards if c.order_group == g):.2f})</div>
         </div>
 ''' for g in active_groups) + '''    </div>
 ''') if is_multi_order else ''}
