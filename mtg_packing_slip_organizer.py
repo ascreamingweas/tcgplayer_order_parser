@@ -65,6 +65,13 @@ VARIANT_STYLES = {
     'full art': ('variant-full-art', 'Full Art', '#3f51b5'),
     'future sight': ('variant-future-sight', 'Future Sight', '#00e5ff'),
     'surge foil': ('variant-surge', 'Surge Foil', '#ff6f00'),
+    'neon ink': ('variant-neon-ink', 'Neon Ink', '#76ff03'),
+    'confetti foil': ('variant-confetti', 'Confetti Foil', '#e040fb'),
+    'galaxy foil': ('variant-galaxy', 'Galaxy Foil', '#7c4dff'),
+    'gilded foil': ('variant-gilded', 'Gilded Foil', '#ffd600'),
+    'step-and-compleat': ('variant-compleat', 'Step-and-Compleat', '#b71c1c'),
+    'textured foil': ('variant-textured', 'Textured Foil', '#ff6e40'),
+    'promo': ('variant-promo', 'Promo', '#f44336'),
 }
 
 
@@ -502,14 +509,22 @@ def parse_card_line(line: str) -> Optional[Card]:
         else:
             card_name_part = remainder.split('-')[0]
 
-    # Extract variant if present (in parentheses)
+    # Extract variants from parenthesized groups
+    # Cards can have multiple: e.g., "(Borderless) (Neon Ink Foil)"
+    # Filter out purely numeric values like "(0298)" which are collector number refs
     variant = None
-    variant_match = re.search(r'\(([^)]+)\)', card_name_part)
-    if variant_match:
-        variant = variant_match.group(1)
-        # Clean up variant name - add spaces (e.g., "ExtendedArt" -> "Extended Art")
-        variant = add_spaces_to_card_name(variant)
-        card_name = card_name_part[:variant_match.start()].strip()
+    all_parens = re.findall(r'\(([^)]+)\)', card_name_part)
+    variant_parts = []
+    for paren_content in all_parens:
+        cleaned = add_spaces_to_card_name(paren_content)
+        # Skip purely numeric values (alternate collector number references)
+        if re.match(r'^\d+$', cleaned.strip()):
+            continue
+        variant_parts.append(cleaned)
+    if variant_parts:
+        variant = " / ".join(variant_parts)
+        # Strip all parenthesized groups from card name
+        card_name = re.sub(r'\s*\([^)]+\)', '', card_name_part).strip()
     else:
         card_name = card_name_part
 
@@ -527,6 +542,13 @@ def parse_card_line(line: str) -> Optional[Card]:
     set_name_display = re.sub(r'Promo Pack:', 'Promo Pack: ', set_name_display)
     set_name_display = re.sub(r'From the Vault:', 'From the Vault: ', set_name_display)
     set_name_display = re.sub(r'\s+', ' ', set_name_display)  # Clean double spaces
+
+    # Tag Prerelease cards as Promo variant so they stand out from regular copies
+    if 'prerelease' in set_name.lower() or 'promo' in set_name.lower():
+        if variant:
+            variant = f"Promo / {variant}"
+        else:
+            variant = "Promo"
 
     return Card(
         quantity=quantity,
@@ -1065,6 +1087,13 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .variant-full-art {{ background: rgba(63,81,181,0.2); color: #7986cb; }}
         .variant-future-sight {{ background: rgba(0,229,255,0.2); color: #00e5ff; }}
         .variant-surge {{ background: rgba(255,111,0,0.2); color: #ff9800; }}
+        .variant-neon-ink {{ background: rgba(118,255,3,0.2); color: #76ff03; }}
+        .variant-confetti {{ background: rgba(224,64,251,0.2); color: #e040fb; }}
+        .variant-galaxy {{ background: rgba(124,77,255,0.2); color: #b388ff; }}
+        .variant-gilded {{ background: rgba(255,214,0,0.2); color: #ffd600; }}
+        .variant-compleat {{ background: rgba(183,28,28,0.2); color: #ef5350; }}
+        .variant-textured {{ background: rgba(255,110,64,0.2); color: #ff6e40; }}
+        .variant-promo {{ background: rgba(244,67,54,0.2); color: #f44336; }}
         .variant-other {{ background: rgba(120,144,156,0.2); color: #90a4ae; }}
         .card-item.has-variant {{
             border-left: 3px solid var(--variant-color, #78909c);
