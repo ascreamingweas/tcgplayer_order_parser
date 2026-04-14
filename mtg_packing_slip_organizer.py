@@ -654,11 +654,13 @@ def get_card_color(scryfall_data: dict) -> str:
     if not scryfall_data:
         return "Colorless"
 
-    # For double-faced cards, use the front face for type and color determination
+    # For double-faced cards, use the front face for type and color determination.
+    # Note: transform/modal DFCs have colors on each face, but flip/split/adventure
+    # cards may only have colors at the top level, so fall back accordingly.
     if "card_faces" in scryfall_data and len(scryfall_data["card_faces"]) > 0:
         front_face = scryfall_data["card_faces"][0]
         type_line = front_face.get("type_line", "")
-        colors = front_face.get("colors", [])
+        colors = front_face.get("colors") if "colors" in front_face else scryfall_data.get("colors", [])
     else:
         type_line = scryfall_data.get("type_line", "")
         colors = scryfall_data.get("colors", [])
