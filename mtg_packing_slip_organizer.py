@@ -113,6 +113,18 @@ TCGPLAYER_SET_OVERRIDES = {
     "The List Reprints": "plst",
     "TimeSpiral:Remastered": "tsr",
     "Time Spiral: Remastered": "tsr",
+    # TCGplayer names the LTR Commander set with a "Commander:" prefix and the full
+    # subtitle; Scryfall calls it "Tales of Middle-earth Commander". The embedded
+    # hyphen in "Middle-earth" also breaks the generic fallback splitter, so register
+    # it explicitly as both a parsing prefix and a name->code mapping.
+    "Commander: The Lord of the Rings: Tales of Middle-earth": "ltc",
+    "Commander:TheLordoftheRings:TalesofMiddle-earth": "ltc",
+    # TCGplayer prefixes "The Big Score" with its parent set; Scryfall lists it standalone.
+    "Outlaws of Thunder Junction: The Big Score": "big",
+    "OutlawsofThunderJunction:TheBigScore": "big",
+    # TCGplayer prefixes the LTR draft set with "Universes Beyond:"; Scryfall does not.
+    "Universes Beyond: The Lord of the Rings: Tales of Middle-earth": "ltr",
+    "UniversesBeyond:TheLordoftheRings:TalesofMiddle-earth": "ltr",
 }
 
 # Global cache for Scryfall set mapping (populated on first use)
@@ -249,6 +261,17 @@ def get_scryfall_set_code(set_name: str) -> Optional[str]:
     lower = set_name.lower()
     for key, code in mapping.items():
         if key.lower() == lower:
+            return code
+
+    # Normalized match: strip everything but alphanumerics. This recovers from
+    # PDF spacing artifacts in the display name (e.g. "FINAL FANTASY: Throughthe
+    # Ages" where add_spaces_to_card_name failed to split "Throughthe").
+    def _normalize(s: str) -> str:
+        return re.sub(r'[^a-z0-9]', '', s.lower())
+
+    target = _normalize(set_name)
+    for key, code in mapping.items():
+        if _normalize(key) == target:
             return code
 
     return None
@@ -791,6 +814,22 @@ def get_search_name(card_name: str) -> str:
     return search_name
 
 
+def _is_exact_printing(scryfall_data: dict, card: Card) -> bool:
+    """True when the Scryfall result is the exact printing we requested.
+
+    Confirms the result came from the set+collector lookup (not a fuzzy name guess)
+    by checking the returned collector number matches and the returned set resolves
+    to the same code as the card's set. Only then is it safe to trust Scryfall's
+    name over the parsed one.
+    """
+    if not card.collector_number:
+        return False
+    if str(scryfall_data.get("collector_number", "")) != str(card.collector_number):
+        return False
+    expected_code = get_scryfall_set_code(card.set_name)
+    return bool(expected_code) and scryfall_data.get("set") == expected_code
+
+
 def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card]:
     """Fetch color and image information for all cards from Scryfall.
 
@@ -806,6 +845,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     # For color lookups, we still cache by card name
     image_cache = {}  # (set_name, collector_number) -> image_url
     color_cache = {}  # card_name -> color
+    name_cache = {}   # (set_name, collector_number) -> authoritative card name
 
     # Track failed lookups for summary
     failed_lookups = []
@@ -825,6 +865,8 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
         if image_cache_key in image_cache and color_cache_key in color_cache:
             card.color = color_cache[color_cache_key]
             card.image_url = image_cache[image_cache_key]
+            if name_cache.get(image_cache_key):
+                card.card_name = name_cache[image_cache_key]
             status = f"{card.color} (cached)"
             print(f"  [{i+1}/{total}] {card.card_name}: {status}")
         else:
@@ -833,13 +875,22 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
 
             # Try to get exact printing with set code and collector number
             scryfall_data = search_scryfall(search_name, card.set_name, card.collector_number)
+            official_name = None
             if scryfall_data:
                 card.color = get_card_color(scryfall_data)
                 card.image_url = get_card_image_url(scryfall_data)
                 official_name = scryfall_data.get("name", search_name)
                 status = card.color
                 print(f"  [{i+1}/{total}] {card.card_name} (searched: {search_name}) -> {official_name}: {card.color}")
-                # DO NOT overwrite card.card_name - keep the original for display
+                # When the result is an authoritative exact printing match (set code +
+                # collector number agree with what we requested), trust Scryfall's name.
+                # This repairs PDF spacing artifacts ("Hopeof") and TCGplayer's
+                # "FlavorName - RealCardName" format (e.g. FINAL FANTASY: Through the Ages,
+                # where "To the Crystal Tower - Cryptic Command" should display as just
+                # "Cryptic Command"). We don't override on fuzzy name fallbacks, since
+                # those can resolve to a different printing or the wrong card entirely.
+                if official_name and _is_exact_printing(scryfall_data, card):
+                    card.card_name = official_name
             else:
                 card.color = "Colorless"
                 card.image_url = None
@@ -847,9 +898,10 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 failed_lookups.append(f"{card.card_name} (searched: {search_name})")
                 print(f"  [{i+1}/{total}] {card.card_name}: NOT FOUND (defaulting to Colorless)")
 
-            # Cache both color and image
+            # Cache color, image, and corrected name
             color_cache[color_cache_key] = card.color
             image_cache[image_cache_key] = card.image_url
+            name_cache[image_cache_key] = card.card_name
 
         if on_progress:
             on_progress(i + 1, total, card.card_name, status)
