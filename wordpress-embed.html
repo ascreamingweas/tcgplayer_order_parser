@@ -101,7 +101,7 @@
   <div class="upload-area" id="mtgDropZone">
     <input type="file" id="mtgFileInput" accept=".pdf" multiple>
     <div class="label">Drop packing slip PDFs here or click to browse</div>
-    <div class="sublabel">Upload up to 3 for a multi-order pull sheet</div>
+    <div class="sublabel">Upload up to 5 for a multi-order pull sheet</div>
     <div class="file-list" id="mtgFileList"></div>
   </div>
 
@@ -132,9 +132,9 @@
   const procText = document.getElementById('mtgProcText');
   const procDetail = document.getElementById('mtgProcDetail');
 
-  const MAX_FILES = 3;
-  const GROUP_COLORS = ['#4a9eff', '#ff9800', '#66bb6a'];
-  const GROUP_LABELS = ['A', 'B', 'C'];
+  const MAX_FILES = 5;
+  const GROUP_COLORS = ['#4a9eff', '#ff9800', '#66bb6a', '#ab47bc', '#ef5350'];
+  const GROUP_LABELS = ['A', 'B', 'C', 'D', 'E'];
   let selectedFiles = [];
 
   const dropZone = document.getElementById('mtgDropZone');

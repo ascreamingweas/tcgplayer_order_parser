@@ -18,6 +18,7 @@ from mtg_packing_slip_organizer import (
     parse_packing_slip,
     fetch_colors_from_scryfall,
     extract_text_from_pdf,
+    extract_order_info,
     generate_html,
     fetch_scryfall_sets,
     get_set_sync_status,
@@ -170,7 +171,7 @@ def index():
         <div class="upload-area" id="dropZone">
             <input type="file" id="fileInput" accept=".pdf" multiple>
             <div class="label">Drop packing slip PDFs here or click to browse</div>
-            <div class="sublabel">Upload up to 3 for a multi-order pull sheet</div>
+            <div class="sublabel">Upload up to 5 for a multi-order pull sheet</div>
             <div class="file-list" id="fileList"></div>
         </div>
 
@@ -206,9 +207,9 @@ def index():
             const procDetail = document.getElementById('procDetail');
 
             // Multi-file management
-            const MAX_FILES = 3;
-            const GROUP_COLORS = ['#4a9eff', '#ff9800', '#66bb6a'];
-            const GROUP_LABELS = ['A', 'B', 'C'];
+            const MAX_FILES = 5;
+            const GROUP_COLORS = ['#4a9eff', '#ff9800', '#66bb6a', '#ab47bc', '#ef5350'];
+            const GROUP_LABELS = ['A', 'B', 'C', 'D', 'E'];
             let selectedFiles = [];
 
             const dropZone = document.getElementById('dropZone');
@@ -446,15 +447,16 @@ def refresh_sets():
 
 @app.post("/api/parse")
 async def parse_pdf(files: list[UploadFile] = File(...)):
-    """Accept up to 3 packing slip PDFs, start processing, and return a job ID for progress tracking."""
+    """Accept up to 5 packing slip PDFs, start processing, and return a job ID for progress tracking."""
 
-    if len(files) > 3:
-        raise HTTPException(status_code=400, detail="Maximum 3 PDFs supported.")
+    if len(files) > 5:
+        raise HTTPException(status_code=400, detail="Maximum 5 PDFs supported.")
 
-    group_labels = ['A', 'B', 'C']
+    group_labels = ['A', 'B', 'C', 'D', 'E']
     is_multi = len(files) > 1
     all_cards = []
     order_numbers = {}
+    order_names = {}
 
     for idx, file in enumerate(files):
         if not file.filename.lower().endswith(".pdf"):
@@ -473,10 +475,9 @@ async def parse_pdf(files: list[UploadFile] = File(...)):
         try:
             cards = parse_packing_slip(tmp_path)
 
-            # Extract order number
+            # Extract order number and purchaser name
             text = extract_text_from_pdf(tmp_path)
-            order_match = re.search(r"Order\s*Number:\s*([A-Z0-9-]+)", text)
-            order_num = order_match.group(1) if order_match else ""
+            order_num, buyer_name = extract_order_info(text)
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
@@ -492,8 +493,10 @@ async def parse_pdf(files: list[UploadFile] = File(...)):
             for card in cards:
                 card.order_group = group
             order_numbers[group] = order_num
+            order_names[group] = buyer_name
         else:
             order_numbers[''] = order_num
+            order_names[''] = buyer_name
 
         all_cards.extend(cards)
 
@@ -505,6 +508,8 @@ async def parse_pdf(files: list[UploadFile] = File(...)):
         "cards": all_cards,
         "order_number": order_label,
         "order_numbers": order_numbers if is_multi else None,
+        "buyer_name": "" if is_multi else order_names.get('', ''),
+        "order_names": order_names if is_multi else None,
         "progress": [],
         "result_html": None,
         "error": None,
@@ -527,6 +532,8 @@ async def parse_pdf(files: list[UploadFile] = File(...)):
                 job["cards"],
                 order_number=job["order_number"],
                 order_numbers=job["order_numbers"],
+                buyer_name=job["buyer_name"],
+                order_names=job["order_names"],
             )
             job["result_html"] = html
             job["status"] = "complete"

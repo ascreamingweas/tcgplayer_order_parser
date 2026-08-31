@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MTG Packing Slip Organizer
-Parses TCGplayer packing slips and reorganizes cards by color and rarity.
+Parses TCGplayer packing slips and reorganizes cards by color, treatment, and rarity.
 Uses Scryfall API to look up card colors.
 """
 
@@ -40,18 +40,22 @@ class Card:
     language: Optional[str] = None  # Non-English language if applicable
     color: str = "Colorless"  # Will be populated from Scryfall
     image_url: Optional[str] = None  # Scryfall card image URL
-    order_group: Optional[str] = None  # 'A', 'B', or 'C' for multi-order pulls
+    order_group: Optional[str] = None  # 'A'-'E' for multi-order pulls
+    cmc: Optional[float] = None  # Converted mana cost, from Scryfall
+    type_line: Optional[str] = None  # Scryfall type line, e.g. "Creature — Elf"
 
 
-# Rarity mapping
-RARITY_ORDER = {"M": 0, "R": 1, "U": 2, "C": 3, "S": 4}
+# Rarity mapping. Mythic and Special sit at the top together, then R/U/C.
+RARITY_ORDER = {"M": 0, "S": 1, "R": 2, "U": 3, "C": 4}
 RARITY_NAMES = {"M": "Mythic Rare", "R": "Rare", "U": "Uncommon", "C": "Common", "S": "Special"}
 
-# Order group colors for multi-order pull sheets (max 3 concurrent orders)
+# Order group colors for multi-order pull sheets (max 5 concurrent orders)
 ORDER_GROUP_COLORS = {
     'A': '#4a9eff',  # blue
     'B': '#ff9800',  # orange
     'C': '#66bb6a',  # green
+    'D': '#ab47bc',  # purple
+    'E': '#ef5350',  # red
 }
 
 # Variant/border treatment styling — maps lowercase keyword to (css_class, label, color)
@@ -86,15 +90,48 @@ def get_variant_style(variant: Optional[str]) -> tuple[str, str, str]:
     # Generic fallback for unknown variants
     return ('variant-other', variant, '#78909c')
 
-# Color order for sorting (WUBRG + multicolor + colorless + land)
+
+# "Premium" treatments are distinguished by the card's frame/art, independent of
+# any foil finish. A card is premium if it carries any of these frame/art
+# treatments — even alongside a fancy foil (e.g. "Textured Foil / Extended Art"
+# is premium). Foil-only finishes (Surge, Galaxy, Confetti, etc.), Foil Etched,
+# White Border, Promo, and plain cards all fall under "Regular".
+PREMIUM_TREATMENTS = (
+    'borderless', 'extended art', 'showcase', 'retro frame', 'full art', 'future sight',
+)
+
+
+def is_premium_treatment(variant: Optional[str]) -> bool:
+    """True when the card has a premium frame/art treatment (foil finish ignored)."""
+    if not variant:
+        return False
+    lower = variant.lower()
+    return any(keyword in lower for keyword in PREMIUM_TREATMENTS)
+
+
+def treatment_bucket(variant: Optional[str]) -> str:
+    """Return the treatment grouping label: 'Premium' or 'Regular'."""
+    return 'Premium' if is_premium_treatment(variant) else 'Regular'
+
+
+# Treatment bucket display order and labels (premium listed first).
+TREATMENT_ORDER = {'Premium': 0, 'Regular': 1}
+TREATMENT_LABELS = {'Premium': 'Premium Treatments', 'Regular': 'Regular'}
+
+
+def is_creature(type_line: Optional[str]) -> bool:
+    """True when the card's type line denotes a creature (incl. artifact creatures)."""
+    return bool(type_line) and 'creature' in type_line.lower()
+
+# Color order for sorting: Multicolor -> Colorless -> WUBRG -> Land
 COLOR_ORDER = {
-    "White": 0,
-    "Blue": 1,
-    "Black": 2,
-    "Red": 3,
-    "Green": 4,
-    "Multicolor": 5,
-    "Colorless": 6,
+    "Multicolor": 0,
+    "Colorless": 1,
+    "White": 2,
+    "Blue": 3,
+    "Black": 4,
+    "Red": 5,
+    "Green": 6,
     "Land": 7,
 }
 
@@ -286,6 +323,30 @@ def extract_text_from_pdf(pdf_path: str) -> str:
             if page_text:
                 text += page_text + "\n"
     return text
+
+
+def extract_order_info(text: str) -> tuple[str, str]:
+    """Extract the order number and purchaser (buyer) name from packing slip text.
+
+    Returns (order_number, buyer_name); either may be "" if not found.
+    """
+    order_match = re.search(r"Order\s*Number:\s*([A-Z0-9-]+)", text)
+    order_num = order_match.group(1) if order_match else ""
+
+    buyer_name = ""
+    # The "Ship To:" block lists the recipient's name on the line right after the
+    # label with normal spacing (e.g. "Michael Murphy"), which reads better than
+    # the concatenated "BuyerName:" field ("MichaelMurphy").
+    ship_match = re.search(r"Ship\s*To:\s*(.+)", text)
+    if ship_match:
+        buyer_name = ship_match.group(1).strip()
+    else:
+        # Fallback: the concatenated BuyerName field, spaced out for readability.
+        buyer_match = re.search(r"Buyer\s*Name:\s*(\S+)", text)
+        if buyer_match:
+            buyer_name = add_spaces_to_card_name(buyer_match.group(1).strip())
+
+    return order_num, buyer_name
 
 
 def add_spaces_to_card_name(name: str) -> str:
@@ -846,6 +907,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     image_cache = {}  # (set_name, collector_number) -> image_url
     color_cache = {}  # card_name -> color
     name_cache = {}   # (set_name, collector_number) -> authoritative card name
+    meta_cache = {}   # card_name -> (cmc, type_line); same across printings
 
     # Track failed lookups for summary
     failed_lookups = []
@@ -867,6 +929,8 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
             card.image_url = image_cache[image_cache_key]
             if name_cache.get(image_cache_key):
                 card.card_name = name_cache[image_cache_key]
+            if color_cache_key in meta_cache:
+                card.cmc, card.type_line = meta_cache[color_cache_key]
             status = f"{card.color} (cached)"
             print(f"  [{i+1}/{total}] {card.card_name}: {status}")
         else:
@@ -879,6 +943,11 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
             if scryfall_data:
                 card.color = get_card_color(scryfall_data)
                 card.image_url = get_card_image_url(scryfall_data)
+                card.cmc = scryfall_data.get("cmc")
+                card.type_line = scryfall_data.get("type_line")
+                if card.type_line is None and scryfall_data.get("card_faces"):
+                    # Double-faced cards: fall back to the front face's type line.
+                    card.type_line = scryfall_data["card_faces"][0].get("type_line")
                 official_name = scryfall_data.get("name", search_name)
                 status = card.color
                 print(f"  [{i+1}/{total}] {card.card_name} (searched: {search_name}) -> {official_name}: {card.color}")
@@ -898,10 +967,11 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 failed_lookups.append(f"{card.card_name} (searched: {search_name})")
                 print(f"  [{i+1}/{total}] {card.card_name}: NOT FOUND (defaulting to Colorless)")
 
-            # Cache color, image, and corrected name
+            # Cache color, image, corrected name, and card metadata
             color_cache[color_cache_key] = card.color
             image_cache[image_cache_key] = card.image_url
             name_cache[image_cache_key] = card.card_name
+            meta_cache[color_cache_key] = (card.cmc, card.type_line)
 
         if on_progress:
             on_progress(i + 1, total, card.card_name, status)
@@ -917,8 +987,9 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
 
 
 def generate_html(cards: list[Card], output_path: str = None, order_number: str = "",
-                   order_numbers: dict[str, str] = None):
-    """Generate an HTML page organized by color and rarity."""
+                   order_numbers: dict[str, str] = None, buyer_name: str = "",
+                   order_names: dict[str, str] = None):
+    """Generate an HTML page organized by color, treatment, and rarity."""
     import hashlib
 
     # Create a unique generation ID from the card data so progress resets on new orders
@@ -933,14 +1004,16 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     is_multi_order = len(active_groups) > 1
     if not order_numbers:
         order_numbers = {}
+    if not order_names:
+        order_names = {}
 
-    # Group cards by color, then by rarity
-    organized = defaultdict(lambda: defaultdict(list))
+    # Group cards by color, then treatment (Premium/Regular), then rarity.
+    organized = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
     for card in cards:
-        organized[card.color][card.rarity].append(card)
+        organized[card.color][treatment_bucket(card.variant)][card.rarity].append(card)
 
-    # Sort colors and rarities
+    # Sort colors
     sorted_colors = sorted(organized.keys(), key=lambda c: COLOR_ORDER.get(c, 99))
 
     # Calculate totals
@@ -952,7 +1025,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MTG Order - Organized by Color & Rarity</title>
+    <title>MTG Order - Organized by Color, Treatment & Rarity</title>
     <style>
         * {{
             box-sizing: border-box;
@@ -1002,7 +1075,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             border-radius: 12px;
             overflow: hidden;
         }}
-        .color-section.collapsed .rarity-section {{
+        .color-section.collapsed .treatment-section {{
             display: none;
         }}
         .color-section.section-complete .color-header {{
@@ -1062,6 +1135,26 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .header-Colorless {{ background: linear-gradient(90deg, rgba(158,158,158,0.3), transparent); }}
         .header-Land {{ background: linear-gradient(90deg, rgba(121,85,72,0.3), transparent); }}
 
+        .treatment-header {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 14px 20px 2px;
+            padding: 6px 0;
+            font-size: 0.9em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }}
+        .treatment-header::before, .treatment-header::after {{
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: currentColor;
+            opacity: 0.25;
+        }}
+        .treatment-premium {{ color: #ffcf5c; }}
+        .treatment-regular {{ color: #90a4ae; }}
         .rarity-section {{
             padding: 10px 20px;
         }}
@@ -1100,6 +1193,23 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             font-size: 1.2em;
             color: #e94560;
             text-align: center;
+        }}
+        /* Mana value chip — deliberately low-key so it never competes with quantity */
+        .card-cmc {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 17px;
+            height: 17px;
+            padding: 0 4px;
+            margin-right: 7px;
+            border-radius: 9px;
+            background: rgba(255,255,255,0.09);
+            color: #b0b8c0;
+            font-size: 0.72em;
+            font-weight: 700;
+            vertical-align: middle;
+            flex-shrink: 0;
         }}
         .card-info {{
             display: flex;
@@ -1152,6 +1262,38 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .card-item.has-variant {{
             border-left: 3px solid var(--variant-color, #78909c);
         }}
+        /* Card-type ring: warm = creature, cool grey = everything else.
+           Uses inset box-shadow so it follows the rounded corners and doesn't
+           collide with the variant/order edge borders. */
+        .card-item.type-creature {{
+            box-shadow: inset 0 0 0 1.5px rgba(255, 202, 115, 0.5);
+        }}
+        .card-item.type-noncreature {{
+            box-shadow: inset 0 0 0 1px rgba(150, 165, 175, 0.3);
+        }}
+        /* Small key explaining the CMC chip and creature/non-creature rings */
+        .card-key {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 18px;
+            margin: 0 0 20px;
+            padding: 10px 16px;
+            background: #141b32;
+            border: 1px solid #24304f;
+            border-radius: 8px;
+            font-size: 0.8em;
+            color: #90a4ae;
+        }}
+        .card-key-item {{ display: inline-flex; align-items: center; gap: 7px; }}
+        .card-key-swatch {{
+            width: 22px;
+            height: 22px;
+            border-radius: 5px;
+            flex-shrink: 0;
+        }}
+        .card-key-swatch.creature {{ box-shadow: inset 0 0 0 1.5px rgba(255, 202, 115, 0.7); }}
+        .card-key-swatch.noncreature {{ box-shadow: inset 0 0 0 1px rgba(150, 165, 175, 0.5); }}
         /* Order group pill */
         .order-pill {{
             width: 26px;
@@ -1168,6 +1310,9 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .order-pill-A {{ background: #4a9eff; }}
         .order-pill-B {{ background: #ff9800; }}
         .order-pill-C {{ background: #66bb6a; }}
+        .order-pill-D {{ background: #ab47bc; }}
+        .order-pill-E {{ background: #ef5350; }}
+        .card-item.filtered-out {{ display: none; }}
         .card-item.multi-order {{
             grid-template-columns: 30px 40px 1fr auto;
             border-left: 3px solid var(--group-color, transparent);
@@ -1191,7 +1336,14 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             background: #16213e;
             padding: 10px 18px;
             border-radius: 8px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: opacity 0.15s, border-color 0.15s, background 0.15s;
+            user-select: none;
         }}
+        .order-legend-item:hover {{ background: #1c2a4e; }}
+        .order-legend-item.inactive {{ opacity: 0.35; }}
+        .order-legend-item.soloed {{ border-color: var(--group-color, #6c63ff); }}
         .order-legend-label {{
             color: #ccc;
             font-size: 0.9em;
@@ -1200,6 +1352,24 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             color: #888;
             font-size: 0.8em;
         }}
+        .order-filter-hint {{
+            text-align: center;
+            color: #888;
+            font-size: 0.85em;
+            margin-bottom: 10px;
+        }}
+        .order-filter-all {{
+            background: #6c63ff;
+            color: #fff;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 14px;
+            font-size: 0.85em;
+            font-weight: 600;
+            cursor: pointer;
+            margin-left: 6px;
+        }}
+        .order-filter-all:hover {{ background: #5a52e0; }}
         .card-price {{
             text-align: right;
             color: #4caf50;
@@ -1355,9 +1525,9 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     <div id="card-preview"><img src="" alt="Card Preview"></div>
 
     <h1>MTG Order - Pull Sheet</h1>
-    <div class="order-info">{order_number if order_number else 'TCGplayer Order'}</div>
+    <div class="order-info">{order_number if order_number else 'TCGplayer Order'}{f' — {buyer_name}' if buyer_name else ''}</div>
 
-    <div class="progress-text">Progress: <span id="progress-count">0</span> / {len(cards)} items pulled</div>
+    <div class="progress-text">Progress: <span id="progress-count">0</span> / <span id="progress-total">{len(cards)}</span> items pulled</div>
     <div class="progress-bar">
         <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
     </div>
@@ -1373,21 +1543,28 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         </div>
         <div class="summary-item">
             <div class="number">{len(cards)}</div>
-            <div class="label">Line Items</div>
+            <div class="label">Unique Cards</div>
         </div>
     </div>
-{"".join(f'''
+
+    <div class="card-key">
+        <span class="card-key-item"><span class="card-cmc">3</span> Mana value (CMC)</span>
+        <span class="card-key-item"><span class="card-key-swatch creature"></span> Creature</span>
+        <span class="card-key-item"><span class="card-key-swatch noncreature"></span> Non-creature</span>
+    </div>
+{f'''
+    <div class="order-filter-hint">Click an order to focus on just its cards<button class="order-filter-all" onclick="showAllOrders()">Show all</button></div>
     <div class="order-legend">
-''' + "".join(f'''        <div class="order-legend-item">
+''' + "".join(f'''        <div class="order-legend-item" data-filter-group="{g}" style="--group-color: {ORDER_GROUP_COLORS.get(g, '#888')}" onclick="toggleOrderFilter('{g}')">
             <div class="order-pill order-pill-{g}">{g}</div>
             <div>
-                <div class="order-legend-label">Order {g}</div>
+                <div class="order-legend-label">Order {g}{f" — {order_names.get(g)}" if order_names.get(g) else ""}</div>
                 <div class="order-legend-number">{order_numbers.get(g, '')}</div>
             </div>
-            <div class="order-legend-label">({sum(1 for c in cards if c.order_group == g)} items — ${sum(c.total_price for c in cards if c.order_group == g):.2f})</div>
+            <div class="order-legend-label">({sum(1 for c in cards if c.order_group == g)} unique / {sum(c.quantity for c in cards if c.order_group == g)} total cards — ${sum(c.total_price for c in cards if c.order_group == g):.2f})</div>
         </div>
 ''' for g in active_groups) + '''    </div>
-''') if is_multi_order else ''}
+''' if is_multi_order else ''}
 
     <nav class="nav">
         <div class="nav-links">
@@ -1396,7 +1573,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     # Add navigation links with progress counters
     for color in sorted_colors:
         color_cards = organized[color]
-        section_total = sum(1 for rarity in color_cards.values() for _ in rarity)
+        section_total = sum(1 for treat in color_cards.values() for rarity in treat.values() for _ in rarity)
         html += f'            <a href="#{color.lower()}" class="nav-link color-{color}" data-section="{color.lower()}">{color} <span class="nav-progress">(<span class="nav-remaining">{section_total}</span>/{section_total})</span></a>\n'
 
     html += """        </div>
@@ -1411,12 +1588,15 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     # Add card sections
     card_index = 0
     for color in sorted_colors:
-        color_cards = organized[color]
-        sorted_rarities = sorted(color_cards.keys(), key=lambda r: RARITY_ORDER.get(r, 99))
+        color_cards = organized[color]  # treatment -> rarity -> [cards]
+        sorted_treatments = sorted(color_cards.keys(), key=lambda t: TREATMENT_ORDER.get(t, 99))
 
-        color_total = sum(c.quantity for rarity in color_cards.values() for c in rarity)
-
-        section_item_count = sum(1 for rarity in color_cards.values() for _ in rarity)
+        color_total = sum(
+            c.quantity for treat in color_cards.values() for rarity in treat.values() for c in rarity
+        )
+        section_item_count = sum(
+            1 for treat in color_cards.values() for rarity in treat.values() for _ in rarity
+        )
         html += f"""
     <div class="color-section" id="{color.lower()}" data-section-total="{section_item_count}">
         <div class="color-header header-{color}" onclick="toggleSection(this.parentElement)">
@@ -1427,78 +1607,111 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         </div>
 """
 
-        for rarity in sorted_rarities:
-            # Sort cards: variants first, then by card name, then by order group
-            # This keeps duplicate cards from different orders adjacent
-            rarity_cards = sorted(
-                color_cards[rarity],
-                key=lambda c: (0 if c.variant else 1, c.card_name, c.order_group or '')
-            )
-            rarity_name = RARITY_NAMES.get(rarity, rarity)
+        for treatment in sorted_treatments:
+            treatment_cards = color_cards[treatment]
+            sorted_rarities = sorted(treatment_cards.keys(), key=lambda r: RARITY_ORDER.get(r, 99))
+            treatment_total = sum(c.quantity for rarity in treatment_cards.values() for c in rarity)
 
             html += f"""
-        <div class="rarity-section">
-            <div class="rarity-header rarity-{rarity}">{rarity_name} ({sum(c.quantity for c in rarity_cards)})</div>
-            <div class="card-list">
+        <div class="treatment-section">
+            <div class="treatment-header treatment-{treatment.lower()}">{TREATMENT_LABELS.get(treatment, treatment)} ({treatment_total} cards)</div>
 """
 
-            for card in rarity_cards:
-                foil_badge = '<span class="card-foil"> ★ FOIL</span>' if card.is_foil else ''
-                language_badge = f'<span class="card-language"> [{card.language}]</span>' if card.language else ''
-                image_attr = f' data-image="{card.image_url}"' if card.image_url else ''
+            for rarity in sorted_rarities:
+                # Within a rarity bucket: creatures before non-creatures, each
+                # ordered by ascending mana cost (unknown CMC sorts last), then by
+                # name and order group to keep duplicates adjacent.
+                rarity_cards = sorted(
+                    treatment_cards[rarity],
+                    key=lambda c: (
+                        0 if is_creature(c.type_line) else 1,
+                        c.cmc if c.cmc is not None else 999,
+                        c.card_name,
+                        c.order_group or '',
+                    )
+                )
+                rarity_name = RARITY_NAMES.get(rarity, rarity)
 
-                # Variant badge
-                variant_css, variant_label, variant_color = get_variant_style(card.variant)
-                if variant_css:
-                    variant_badge = f'<span class="card-variant {variant_css}">{variant_label}</span>'
-                    variant_style = f' style="--variant-color: {variant_color}"'
-                    variant_class = ' has-variant'
-                else:
-                    variant_badge = ''
-                    variant_style = ''
-                    variant_class = ''
+                html += f"""
+            <div class="rarity-section">
+                <div class="rarity-header rarity-{rarity}">{rarity_name} ({sum(c.quantity for c in rarity_cards)})</div>
+                <div class="card-list">
+"""
 
-                # Order group pill (only in multi-order mode)
-                if is_multi_order and card.order_group:
-                    group = card.order_group
-                    group_color = ORDER_GROUP_COLORS.get(group, '#888')
-                    order_pill = f'<div class="order-pill order-pill-{group}">{group}</div>'
-                    multi_class = ' multi-order'
-                    group_style = f' --group-color: {group_color};'
-                    data_group = f' data-group="{group}"'
-                else:
-                    order_pill = ''
-                    multi_class = ''
-                    group_style = ''
-                    data_group = ''
+                for card in rarity_cards:
+                    foil_badge = '<span class="card-foil"> ★ FOIL</span>' if card.is_foil else ''
+                    language_badge = f'<span class="card-language"> [{card.language}]</span>' if card.language else ''
+                    image_attr = f' data-image="{card.image_url}"' if card.image_url else ''
 
-                # Combine inline styles
-                combined_style = ''
-                if variant_style or group_style:
-                    style_parts = []
-                    if variant_color:
-                        style_parts.append(f'--variant-color: {variant_color}')
-                    if group_style:
-                        style_parts.append(group_style.strip().rstrip(';'))
-                    combined_style = f' style="{"; ".join(style_parts)}"'
+                    # Variant badge
+                    variant_css, variant_label, variant_color = get_variant_style(card.variant)
+                    if variant_css:
+                        variant_badge = f'<span class="card-variant {variant_css}">{variant_label}</span>'
+                        variant_style = f' style="--variant-color: {variant_color}"'
+                        variant_class = ' has-variant'
+                    else:
+                        variant_badge = ''
+                        variant_style = ''
+                        variant_class = ''
 
-                # Escape HTML in card name
-                safe_card_name = card.card_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                safe_set_name = card.set_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    # Order group pill (only in multi-order mode)
+                    if is_multi_order and card.order_group:
+                        group = card.order_group
+                        group_color = ORDER_GROUP_COLORS.get(group, '#888')
+                        order_pill = f'<div class="order-pill order-pill-{group}">{group}</div>'
+                        multi_class = ' multi-order'
+                        group_style = f' --group-color: {group_color};'
+                        data_group = f' data-group="{group}"'
+                    else:
+                        order_pill = ''
+                        multi_class = ''
+                        group_style = ''
+                        data_group = ''
 
-                html += f"""                <div class="card-item{variant_class}{multi_class}" data-index="{card_index}"{data_group}{image_attr}{combined_style} onclick="toggleCard(this)">
+                    # Combine inline styles
+                    combined_style = ''
+                    if variant_style or group_style:
+                        style_parts = []
+                        if variant_color:
+                            style_parts.append(f'--variant-color: {variant_color}')
+                        if group_style:
+                            style_parts.append(group_style.strip().rstrip(';'))
+                        combined_style = f' style="{"; ".join(style_parts)}"'
+
+                    # Card-type ring (only when Scryfall gave us a type line)
+                    if card.type_line is None:
+                        type_class = ''
+                    elif is_creature(card.type_line):
+                        type_class = ' type-creature'
+                    else:
+                        type_class = ' type-noncreature'
+
+                    # Mana value chip (omit when unknown); format 3.0 -> "3", 0.5 -> "0.5"
+                    if card.cmc is not None:
+                        cmc_chip = f'<span class="card-cmc" title="Mana value {card.cmc:g}">{card.cmc:g}</span>'
+                    else:
+                        cmc_chip = ''
+
+                    # Escape HTML in card name
+                    safe_card_name = card.card_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    safe_set_name = card.set_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+                    html += f"""                <div class="card-item{variant_class}{multi_class}{type_class}" data-index="{card_index}"{data_group}{image_attr}{combined_style} onclick="toggleCard(this)">
                     {order_pill}<div class="card-qty">{card.quantity}x</div>
                     <div class="card-info">
-                        <div class="card-name">{safe_card_name}{variant_badge}{foil_badge}{language_badge}</div>
+                        <div class="card-name">{cmc_chip}{safe_card_name}{variant_badge}{foil_badge}{language_badge}</div>
                         <div class="card-details">{safe_set_name} #{card.collector_number} - {card.condition}</div>
                     </div>
                     <div class="card-price">${card.total_price:.2f}</div>
                 </div>
 """
-                card_index += 1
+                    card_index += 1
 
-            html += """            </div>
-        </div>
+                html += """                </div>
+            </div>
+"""
+
+            html += """        </div>
 """
 
         html += """    </div>
@@ -1506,18 +1719,25 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
     html += f"""
     <script>
-        const totalItems = {len(cards)};
+        // Multi-order view filter state
+        const isMultiOrder = {str(is_multi_order).lower()};
+        const orderGroups = {list(active_groups)};
+        let activeGroups = new Set(orderGroups);
 
         function updateProgress() {{
-            const checked = document.querySelectorAll('.card-item.checked').length;
+            // Counts reflect only the orders currently shown (filter-aware).
+            const total = document.querySelectorAll('.card-item:not(.filtered-out)').length;
+            const checked = document.querySelectorAll('.card-item.checked:not(.filtered-out)').length;
             document.getElementById('progress-count').textContent = checked;
-            document.getElementById('progress-fill').style.width = (checked / totalItems * 100) + '%';
+            const totalEl = document.getElementById('progress-total');
+            if (totalEl) {{ totalEl.textContent = total; }}
+            document.getElementById('progress-fill').style.width = (total ? (checked / total * 100) : 0) + '%';
         }}
 
         function updateSectionProgress() {{
             document.querySelectorAll('.color-section').forEach((section) => {{
-                const total = parseInt(section.dataset.sectionTotal);
-                const checked = section.querySelectorAll('.card-item.checked').length;
+                const total = section.querySelectorAll('.card-item:not(.filtered-out)').length;
+                const checked = section.querySelectorAll('.card-item.checked:not(.filtered-out)').length;
                 const remaining = total - checked;
                 const sectionId = section.id;
 
@@ -1607,6 +1827,64 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             updateSectionProgress();
         }}
 
+        // --- Multi-order view filter ---
+        function allActive() {{
+            return activeGroups.size === orderGroups.length;
+        }}
+
+        function applyOrderFilter() {{
+            // Show/hide individual cards by their order group.
+            document.querySelectorAll('.card-item[data-group]').forEach((item) => {{
+                item.classList.toggle('filtered-out', !activeGroups.has(item.dataset.group));
+            }});
+            // Hide rarity sub-sections that have no visible cards.
+            document.querySelectorAll('.rarity-section').forEach((rs) => {{
+                rs.style.display = rs.querySelector('.card-item:not(.filtered-out)') ? '' : 'none';
+            }});
+            // Hide treatment sub-sections (incl. their header) that have no visible cards.
+            document.querySelectorAll('.treatment-section').forEach((ts) => {{
+                ts.style.display = ts.querySelector('.card-item:not(.filtered-out)') ? '' : 'none';
+            }});
+            // Hide color sections (and their nav links) that have no visible cards.
+            document.querySelectorAll('.color-section').forEach((section) => {{
+                const hasVisible = !!section.querySelector('.card-item:not(.filtered-out)');
+                section.style.display = hasVisible ? '' : 'none';
+                const navLink = document.querySelector('.nav-link[data-section="' + section.id + '"]');
+                if (navLink) {{ navLink.style.display = hasVisible ? '' : 'none'; }}
+            }});
+            // Reflect state in the legend controls.
+            const showingAll = allActive();
+            document.querySelectorAll('.order-legend-item[data-filter-group]').forEach((el) => {{
+                const g = el.dataset.filterGroup;
+                el.classList.toggle('inactive', !activeGroups.has(g));
+                el.classList.toggle('soloed', !showingAll && activeGroups.has(g));
+            }});
+            const allBtn = document.querySelector('.order-filter-all');
+            if (allBtn) {{ allBtn.style.visibility = showingAll ? 'hidden' : 'visible'; }}
+            localStorage.setItem('order-filter-' + generationId, JSON.stringify([...activeGroups]));
+            updateProgress();
+            updateSectionProgress();
+        }}
+
+        function toggleOrderFilter(g) {{
+            if (allActive()) {{
+                // From "all shown", a click isolates the chosen order.
+                activeGroups = new Set([g]);
+            }} else if (activeGroups.has(g)) {{
+                activeGroups.delete(g);
+                // Never leave nothing visible — fall back to showing everything.
+                if (activeGroups.size === 0) {{ activeGroups = new Set(orderGroups); }}
+            }} else {{
+                activeGroups.add(g);
+            }}
+            applyOrderFilter();
+        }}
+
+        function showAllOrders() {{
+            activeGroups = new Set(orderGroups);
+            applyOrderFilter();
+        }}
+
         // Auto-reset progress when a new order is loaded
         const generationId = '{generation_id}';
         if (localStorage.getItem('generation-id') !== generationId) {{
@@ -1634,6 +1912,16 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                     section.classList.add('collapsed');
                 }}
             }});
+        }}
+
+        // Restore any saved order filter (multi-order sheets only).
+        if (isMultiOrder) {{
+            try {{
+                const saved = JSON.parse(localStorage.getItem('order-filter-' + generationId) || '[]');
+                const valid = saved.filter((g) => orderGroups.includes(g));
+                if (valid.length > 0) {{ activeGroups = new Set(valid); }}
+            }} catch (e) {{ /* ignore malformed filter state */ }}
+            applyOrderFilter();
         }}
 
         updateProgress();
@@ -1708,8 +1996,8 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: python mtg_packing_slip_organizer.py <slip1.pdf> [slip2.pdf] [slip3.pdf] [-o output.html]")
         print("\nThis tool parses TCGplayer packing slips and generates an HTML page")
-        print("organized by card color and rarity for easier order fulfillment.")
-        print("Pass up to 3 PDFs to merge into a single multi-order pull sheet.")
+        print("organized by card color, treatment, and rarity for easier order fulfillment.")
+        print("Pass up to 5 PDFs to merge into a single multi-order pull sheet.")
         sys.exit(1)
 
     # Parse arguments: PDF files and optional -o output path
@@ -1725,8 +2013,8 @@ def main():
             pdf_paths.append(args[i])
             i += 1
 
-    if len(pdf_paths) > 3:
-        print("Error: Maximum 3 PDFs supported for multi-order pull sheets.")
+    if len(pdf_paths) > 5:
+        print("Error: Maximum 5 PDFs supported for multi-order pull sheets.")
         sys.exit(1)
 
     # Validate all files exist
@@ -1738,9 +2026,11 @@ def main():
     if not output_path:
         output_path = pdf_paths[0].rsplit('.', 1)[0] + '_organized.html'
 
-    group_labels = ['A', 'B', 'C']
+    group_labels = ['A', 'B', 'C', 'D', 'E']
     all_cards = []
     order_numbers = {}
+    order_names = {}
+    single_buyer_name = ""
     is_multi = len(pdf_paths) > 1
 
     for idx, pdf_path in enumerate(pdf_paths):
@@ -1758,12 +2048,14 @@ def main():
             for card in cards:
                 card.order_group = group
 
-        # Extract order number
+        # Extract order number and purchaser name
         text = extract_text_from_pdf(pdf_path)
-        order_match = re.search(r"Order\s*Number:\s*([A-Z0-9-]+)", text)
-        order_num = order_match.group(1) if order_match else ""
+        order_num, buyer_name = extract_order_info(text)
         if group:
             order_numbers[group] = order_num
+            order_names[group] = buyer_name
+        else:
+            single_buyer_name = buyer_name
 
         all_cards.extend(cards)
 
@@ -1776,7 +2068,10 @@ def main():
 
     # Generate HTML
     order_label = order_numbers.get('A', '') if not is_multi else "Multi-Order Pull Sheet"
-    generate_html(all_cards, output_path, order_label, order_numbers=order_numbers if is_multi else None)
+    generate_html(all_cards, output_path, order_label,
+                  order_numbers=order_numbers if is_multi else None,
+                  buyer_name="" if is_multi else single_buyer_name,
+                  order_names=order_names if is_multi else None)
 
     print(f"\nDone! Open {output_path} in your browser.")
 
