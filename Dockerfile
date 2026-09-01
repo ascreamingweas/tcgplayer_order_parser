@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY mtg_packing_slip_organizer.py app.py ./
+COPY mtg_packing_slip_organizer.py app.py fonts_data.py ./
 
 EXPOSE 8000
 
