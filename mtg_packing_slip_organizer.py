@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from collections import defaultdict
 from typing import Optional
 
+from fonts_data import PLANEWALKER_CMC_WOFF2_B64, PLANEWALKER_DINGS_WOFF2_B64
+
 # Try to import pdfplumber, provide helpful error if not available
 try:
     import pdfplumber
@@ -48,6 +50,30 @@ class Card:
 # Rarity mapping. Mythic and Special sit at the top together, then R/U/C.
 RARITY_ORDER = {"M": 0, "S": 1, "R": 2, "U": 3, "C": 4}
 RARITY_NAMES = {"M": "Mythic Rare", "R": "Rare", "U": "Uncommon", "C": "Common", "S": "Special"}
+
+# Decorative "vine" frame for creature rows, as a tiling SVG border-image data URI.
+# Green stems with leaves at the edge midpoints and node dots at the corners; sliced
+# and repeated so it wraps rows of any width. Differentiates creatures by texture
+# rather than adding another row color.
+VINE_BORDER = (
+    "data:image/svg+xml,"
+    "%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='48'%20viewBox='0%200%2048%2048'%3E"
+    "%3Cpath%20d='M6%206%20Q6%2024%206%2042'%20fill='none'%20stroke='%235f9e4a'%20stroke-width='2.2'%20stroke-linecap='round'/%3E"
+    "%3Cpath%20d='M42%206%20Q42%2024%2042%2042'%20fill='none'%20stroke='%235f9e4a'%20stroke-width='2.2'%20stroke-linecap='round'/%3E"
+    "%3Cpath%20d='M6%206%20Q24%206%2042%206'%20fill='none'%20stroke='%235f9e4a'%20stroke-width='2.2'%20stroke-linecap='round'/%3E"
+    "%3Cpath%20d='M6%2042%20Q24%2042%2042%2042'%20fill='none'%20stroke='%235f9e4a'%20stroke-width='2.2'%20stroke-linecap='round'/%3E"
+    "%3Cg%20fill='%237cb342'%3E"
+    "%3Cellipse%20cx='24'%20cy='6'%20rx='5'%20ry='2.6'%20transform='rotate%2822%2024%206%29'/%3E"
+    "%3Cellipse%20cx='24'%20cy='42'%20rx='5'%20ry='2.6'%20transform='rotate%28-22%2024%2042%29'/%3E"
+    "%3Cellipse%20cx='6'%20cy='24'%20rx='2.6'%20ry='5'%20transform='rotate%2822%206%2024%29'/%3E"
+    "%3Cellipse%20cx='42'%20cy='24'%20rx='2.6'%20ry='5'%20transform='rotate%28-22%2042%2024%29'/%3E"
+    "%3C/g%3E"
+    "%3Cg%20fill='%23558b2f'%3E"
+    "%3Ccircle%20cx='6'%20cy='6'%20r='2.7'/%3E%3Ccircle%20cx='42'%20cy='6'%20r='2.7'/%3E"
+    "%3Ccircle%20cx='6'%20cy='42'%20r='2.7'/%3E%3Ccircle%20cx='42'%20cy='42'%20r='2.7'/%3E"
+    "%3C/g%3E"
+    "%3C/svg%3E"
+)
 
 # Order group colors for multi-order pull sheets (max 5 concurrent orders)
 ORDER_GROUP_COLORS = {
@@ -133,6 +159,34 @@ COLOR_ORDER = {
     "Red": 5,
     "Green": 6,
     "Land": 7,
+}
+
+# Mana pips drawn from the Planewalker Dings icon set: which character each color
+# maps to, and the ink color to render it in. Colors without a glyph (e.g. Land)
+# fall back to the plain gradient dot.
+COLOR_PIP_GLYPH = {
+    "White": "A",
+    "Blue": "B",
+    "Black": "C",
+    "Red": "D",
+    "Green": "E",
+    "Multicolor": "F",
+    "Colorless": "P",
+    "Land": "{",
+}
+COLOR_PIP_INK = {
+    "White": "#f5efd6",
+    "Blue": "#3aa3e0",
+    "Black": "#c3b9dd",
+    "Red": "#ee5a52",
+    "Green": "#5bbb63",
+    "Land": "#a1887f",
+}
+# Colorless and Multicolor read better with a gradient fill than a flat ink: a silver
+# sheen and a WUBRG rainbow, respectively. These map to CSS classes (see .pip-* rules).
+PIP_GRADIENT_CLASS = {
+    "Colorless": "pip-colorless",
+    "Multicolor": "pip-multicolor",
 }
 
 # TCGPlayer-specific set name overrides that don't match Scryfall naming.
@@ -1027,6 +1081,24 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MTG Order - Organized by Color, Treatment & Rarity</title>
     <style>
+        /* Planewalker (free Beleren-style face by Pixel Sagas), subset to digits,
+           embedded so the CMC numeral renders the same everywhere. */
+        @font-face {{
+            font-family: 'PlanewalkerCMC';
+            src: url(data:font/woff2;base64,{PLANEWALKER_CMC_WOFF2_B64}) format('woff2');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }}
+        /* Planewalker Dings (Pixel Sagas) — MTG-style icon glyphs, subset to the
+           mana pips and flourish characters we use. */
+        @font-face {{
+            font-family: 'PlanewalkerDings';
+            src: url(data:font/woff2;base64,{PLANEWALKER_DINGS_WOFF2_B64}) format('woff2');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }}
         * {{
             box-sizing: border-box;
         }}
@@ -1117,6 +1189,44 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             border-radius: 50%;
             border: 2px solid rgba(255,255,255,0.3);
         }}
+        /* Mana-color pip rendered from the Planewalker Dings icon set */
+        .color-pip-glyph {{
+            font-family: 'PlanewalkerDings';
+            font-size: 1.7em;
+            line-height: 1;
+            width: 1.15em;
+            text-align: center;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }}
+        /* Gradient-filled pips (Colorless silver sheen, Multicolor WUBRG rainbow):
+           paint a gradient and clip it to the glyph shape. */
+        .color-pip-glyph.pip-colorless,
+        .color-pip-glyph.pip-multicolor {{
+            color: transparent;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: none;
+            filter: drop-shadow(0 1px 1px rgba(0,0,0,0.45));
+        }}
+        .color-pip-glyph.pip-colorless {{
+            background-image: linear-gradient(135deg, #c3cad2 0%, #8b929b 34%, #5c636d 52%, #838a94 70%, #b0b7c0 100%);
+        }}
+        .color-pip-glyph.pip-multicolor {{
+            background-image: linear-gradient(135deg, #f6efd8 0%, #4aa3e0 26%, #8a63d2 48%, #ef5a52 72%, #5bbb63 100%);
+        }}
+        /* Decorative dings bookends flanking the report title */
+        .title-flourish {{
+            font-family: 'PlanewalkerDings';
+            color: #c9a227;
+            font-size: 1.35em;
+            vertical-align: middle;
+            margin: 0 16px;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+        }}
         .color-White {{ background: linear-gradient(135deg, #f8f6d8, #e8e4c9); }}
         .color-Blue {{ background: linear-gradient(135deg, #0e68ab, #1a9bc7); }}
         .color-Black {{ background: linear-gradient(135deg, #393939, #1a1a1a); }}
@@ -1179,9 +1289,11 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             display: grid;
             grid-template-columns: 40px 1fr auto;
             gap: 15px;
-            padding: 10px 15px;
+            padding: 8px 13px;
             background: rgba(255,255,255,0.05);
+            border: 6px solid transparent;
             border-radius: 6px;
+            box-sizing: border-box;
             align-items: center;
             cursor: pointer;
         }}
@@ -1194,22 +1306,30 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             color: #e94560;
             text-align: center;
         }}
-        /* Mana value chip — deliberately low-key so it never competes with quantity */
+        /* Mana value chip — styled after a generic/colorless MTG mana symbol:
+           a raised grey circle (radial gradient + bevel shadows) with a black serif numeral. */
         .card-cmc {{
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            min-width: 17px;
-            height: 17px;
-            padding: 0 4px;
-            margin-right: 7px;
-            border-radius: 9px;
-            background: rgba(255,255,255,0.09);
-            color: #b0b8c0;
-            font-size: 0.72em;
-            font-weight: 700;
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 30%, #ece7de 0%, #cbc4b8 55%, #a69d90 100%);
+            color: #000;
+            font-family: 'PlanewalkerCMC', 'Beleren', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
+            font-size: 1.18em;
+            font-weight: 500;
+            line-height: 20px;
+            text-align: center;
+            font-variant-numeric: lining-nums tabular-nums;
             vertical-align: middle;
             flex-shrink: 0;
+            box-shadow: 0 1px 1.5px rgba(0,0,0,0.55),
+                        inset 0 1px 1px rgba(255,255,255,0.75),
+                        inset 0 -1.5px 1.5px rgba(0,0,0,0.28);
+            text-shadow: 0 1px 0 rgba(255,255,255,0.35);
         }}
         .card-info {{
             display: flex;
@@ -1259,17 +1379,14 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .variant-textured {{ background: rgba(255,110,64,0.2); color: #ff6e40; }}
         .variant-promo {{ background: rgba(244,67,54,0.2); color: #f44336; }}
         .variant-other {{ background: rgba(120,144,156,0.2); color: #90a4ae; }}
-        .card-item.has-variant {{
-            border-left: 3px solid var(--variant-color, #78909c);
-        }}
-        /* Card-type ring: warm = creature, cool grey = everything else.
-           Uses inset box-shadow so it follows the rounded corners and doesn't
-           collide with the variant/order edge borders. */
+        /* Card-type framing: creatures get a decorative green "vine" border
+           (drawn as a tiling SVG border-image); everything else stays plain.
+           Differentiation is by texture, not color, so it never competes with
+           the treatment/order coloring elsewhere on the row. */
         .card-item.type-creature {{
-            box-shadow: inset 0 0 0 1.5px rgba(255, 202, 115, 0.5);
-        }}
-        .card-item.type-noncreature {{
-            box-shadow: inset 0 0 0 1px rgba(150, 165, 175, 0.3);
+            border-image-source: url("{VINE_BORDER}");
+            border-image-slice: 12;
+            border-image-repeat: round;
         }}
         /* Small key explaining the CMC chip and creature/non-creature rings */
         .card-key {{
@@ -1277,6 +1394,8 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             flex-wrap: wrap;
             align-items: center;
             gap: 18px;
+            width: fit-content;
+            max-width: 100%;
             margin: 0 0 20px;
             padding: 10px 16px;
             background: #141b32;
@@ -1287,13 +1406,19 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         }}
         .card-key-item {{ display: inline-flex; align-items: center; gap: 7px; }}
         .card-key-swatch {{
-            width: 22px;
+            width: 30px;
             height: 22px;
+            border: 6px solid transparent;
             border-radius: 5px;
+            box-sizing: border-box;
+            background: rgba(255,255,255,0.05);
             flex-shrink: 0;
         }}
-        .card-key-swatch.creature {{ box-shadow: inset 0 0 0 1.5px rgba(255, 202, 115, 0.7); }}
-        .card-key-swatch.noncreature {{ box-shadow: inset 0 0 0 1px rgba(150, 165, 175, 0.5); }}
+        .card-key-swatch.creature {{
+            border-image-source: url("{VINE_BORDER}");
+            border-image-slice: 12;
+            border-image-repeat: round;
+        }}
         /* Order group pill */
         .order-pill {{
             width: 26px;
@@ -1315,11 +1440,6 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .card-item.filtered-out {{ display: none; }}
         .card-item.multi-order {{
             grid-template-columns: 30px 40px 1fr auto;
-            border-left: 3px solid var(--group-color, transparent);
-        }}
-        .card-item.multi-order.has-variant {{
-            border-left: 3px solid var(--variant-color, #78909c);
-            border-right: 3px solid var(--group-color, transparent);
         }}
         /* Order group legend */
         .order-legend {{
@@ -1524,7 +1644,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     <!-- Card image hover preview -->
     <div id="card-preview"><img src="" alt="Card Preview"></div>
 
-    <h1>MTG Order - Pull Sheet</h1>
+    <h1><span class="title-flourish">ó</span>MTG Order - Pull Sheet<span class="title-flourish">ô</span></h1>
     <div class="order-info">{order_number if order_number else 'TCGplayer Order'}{f' — {buyer_name}' if buyer_name else ''}</div>
 
     <div class="progress-text">Progress: <span id="progress-count">0</span> / <span id="progress-total">{len(cards)}</span> items pulled</div>
@@ -1549,7 +1669,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
     <div class="card-key">
         <span class="card-key-item"><span class="card-cmc">3</span> Mana value (CMC)</span>
-        <span class="card-key-item"><span class="card-key-swatch creature"></span> Creature</span>
+        <span class="card-key-item"><span class="card-key-swatch creature"></span> Creature (vine border)</span>
         <span class="card-key-item"><span class="card-key-swatch noncreature"></span> Non-creature</span>
     </div>
 {f'''
@@ -1597,10 +1717,21 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         section_item_count = sum(
             1 for treat in color_cards.values() for rarity in treat.values() for _ in rarity
         )
+        # Mana pip: a Planewalker Dings glyph. Most colors get a flat ink; Colorless
+        # and Multicolor use a gradient fill via a dedicated class.
+        if color in COLOR_PIP_GLYPH:
+            glyph = COLOR_PIP_GLYPH[color]
+            if color in PIP_GRADIENT_CLASS:
+                pip_html = f'<span class="color-pip-glyph {PIP_GRADIENT_CLASS[color]}">{glyph}</span>'
+            else:
+                pip_html = f'<span class="color-pip-glyph" style="color: {COLOR_PIP_INK[color]}">{glyph}</span>'
+        else:
+            pip_html = f'<span class="color-pip color-{color}"></span>'
+
         html += f"""
     <div class="color-section" id="{color.lower()}" data-section-total="{section_item_count}">
         <div class="color-header header-{color}" onclick="toggleSection(this.parentElement)">
-            <span class="color-pip color-{color}"></span>
+            {pip_html}
             {color} ({color_total} cards)
             <span class="section-progress"><span class="section-remaining">{section_item_count}</span> remaining</span>
             <span class="collapse-icon">▼</span>
@@ -1643,40 +1774,23 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                     language_badge = f'<span class="card-language"> [{card.language}]</span>' if card.language else ''
                     image_attr = f' data-image="{card.image_url}"' if card.image_url else ''
 
-                    # Variant badge
+                    # Variant badge (treatment label; the row itself is no longer edge-colored)
                     variant_css, variant_label, variant_color = get_variant_style(card.variant)
                     if variant_css:
                         variant_badge = f'<span class="card-variant {variant_css}">{variant_label}</span>'
-                        variant_style = f' style="--variant-color: {variant_color}"'
-                        variant_class = ' has-variant'
                     else:
                         variant_badge = ''
-                        variant_style = ''
-                        variant_class = ''
 
                     # Order group pill (only in multi-order mode)
                     if is_multi_order and card.order_group:
                         group = card.order_group
-                        group_color = ORDER_GROUP_COLORS.get(group, '#888')
                         order_pill = f'<div class="order-pill order-pill-{group}">{group}</div>'
                         multi_class = ' multi-order'
-                        group_style = f' --group-color: {group_color};'
                         data_group = f' data-group="{group}"'
                     else:
                         order_pill = ''
                         multi_class = ''
-                        group_style = ''
                         data_group = ''
-
-                    # Combine inline styles
-                    combined_style = ''
-                    if variant_style or group_style:
-                        style_parts = []
-                        if variant_color:
-                            style_parts.append(f'--variant-color: {variant_color}')
-                        if group_style:
-                            style_parts.append(group_style.strip().rstrip(';'))
-                        combined_style = f' style="{"; ".join(style_parts)}"'
 
                     # Card-type ring (only when Scryfall gave us a type line)
                     if card.type_line is None:
@@ -1696,7 +1810,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                     safe_card_name = card.card_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                     safe_set_name = card.set_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-                    html += f"""                <div class="card-item{variant_class}{multi_class}{type_class}" data-index="{card_index}"{data_group}{image_attr}{combined_style} onclick="toggleCard(this)">
+                    html += f"""                <div class="card-item{multi_class}{type_class}" data-index="{card_index}"{data_group}{image_attr} onclick="toggleCard(this)">
                     {order_pill}<div class="card-qty">{card.quantity}x</div>
                     <div class="card-info">
                         <div class="card-name">{cmc_chip}{safe_card_name}{variant_badge}{foil_badge}{language_badge}</div>
