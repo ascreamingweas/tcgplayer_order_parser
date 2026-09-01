@@ -41,6 +41,20 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 # In-memory store for processing jobs (job_id -> job state)
 _jobs: dict[str, dict] = {}
 
+# Completed reports (job_id -> html), kept so results can be served from a real
+# same-origin URL. A blob: URL opened from inside a cross-origin iframe (e.g. the
+# WordPress embed) is blocked by browsers, so we serve /report/{job_id} instead.
+_results: dict[str, str] = {}
+_MAX_RESULTS = 50
+
+
+def _store_result(job_id: str, html: str) -> None:
+    """Store a completed report, evicting the oldest once over the cap."""
+    _results[job_id] = html
+    while len(_results) > _MAX_RESULTS:
+        oldest = next(iter(_results))
+        del _results[oldest]
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -375,9 +389,10 @@ def index():
                         procText.textContent = 'Done!';
                         procDetail.textContent = 'Opening pull sheet...';
 
-                        // Open result
-                        const blob = new Blob([d.html], { type: 'text/html' });
-                        window.open(URL.createObjectURL(blob), '_blank');
+                        // Open result in a new tab. Use a real same-origin URL
+                        // (not a blob:) so it loads even when this page is
+                        // embedded in a cross-origin iframe (e.g. WordPress).
+                        window.open(d.report_url, '_blank');
 
                         setTimeout(() => {
                             processing.classList.remove('active');
@@ -571,7 +586,10 @@ async def parse_progress(job_id: str, request: Request):
 
             # Check if done
             if job["status"] == "complete":
-                yield f"event: complete\ndata: {json.dumps({'html': job['result_html']})}\n\n"
+                # Persist the report so it can be served from a real URL, then
+                # hand the client that URL (blob: URLs are blocked inside iframes).
+                _store_result(job_id, job["result_html"])
+                yield f"event: complete\ndata: {json.dumps({'report_url': f'/report/{job_id}'})}\n\n"
                 # Clean up job
                 del _jobs[job_id]
                 break
@@ -587,3 +605,12 @@ async def parse_progress(job_id: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/report/{job_id}", response_class=HTMLResponse)
+async def get_report(job_id: str):
+    """Serve a completed pull sheet as a standalone HTML page."""
+    html = _results.get(job_id)
+    if html is None:
+        raise HTTPException(status_code=404, detail="Report not found or expired.")
+    return HTMLResponse(content=html)
