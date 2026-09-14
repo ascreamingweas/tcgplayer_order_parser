@@ -51,6 +51,19 @@ class Card:
 RARITY_ORDER = {"M": 0, "S": 1, "R": 2, "U": 3, "C": 4}
 RARITY_NAMES = {"M": "Mythic Rare", "R": "Rare", "U": "Uncommon", "C": "Common", "S": "Special"}
 
+# Scryfall's authoritative rarity strings -> our single-letter codes. TCGplayer
+# sometimes encodes a slip rarity that reflects the product (e.g. "-P-" for Promo
+# Pack cards) rather than the card's actual rarity, so we prefer Scryfall's value
+# for the exact printing when available.
+SCRYFALL_RARITY_CODES = {
+    "common": "C",
+    "uncommon": "U",
+    "rare": "R",
+    "mythic": "M",
+    "special": "S",
+    "bonus": "S",
+}
+
 # Decorative "vine" frame for creature rows, as a tiling SVG border-image data URI.
 # Green stems with leaves at the edge midpoints and node dots at the corners; sliced
 # and repeated so it wraps rows of any width. Differentiates creatures by texture
@@ -962,6 +975,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     color_cache = {}  # card_name -> color
     name_cache = {}   # (set_name, collector_number) -> authoritative card name
     meta_cache = {}   # card_name -> (cmc, type_line); same across printings
+    rarity_cache = {} # (set_name, collector_number) -> rarity code; per printing
 
     # Track failed lookups for summary
     failed_lookups = []
@@ -985,6 +999,8 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 card.card_name = name_cache[image_cache_key]
             if color_cache_key in meta_cache:
                 card.cmc, card.type_line = meta_cache[color_cache_key]
+            if image_cache_key in rarity_cache:
+                card.rarity = rarity_cache[image_cache_key]
             status = f"{card.color} (cached)"
             print(f"  [{i+1}/{total}] {card.card_name}: {status}")
         else:
@@ -999,6 +1015,13 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 card.image_url = get_card_image_url(scryfall_data)
                 card.cmc = scryfall_data.get("cmc")
                 card.type_line = scryfall_data.get("type_line")
+                # Prefer Scryfall's authoritative rarity over the slip's parsed
+                # value, which can reflect the product (e.g. "P" for Promo Pack)
+                # rather than the card's real rarity. Charms in Promo Packs, for
+                # instance, are uncommon but get encoded as "-P-" on the slip.
+                scryfall_rarity = SCRYFALL_RARITY_CODES.get(scryfall_data.get("rarity"))
+                if scryfall_rarity:
+                    card.rarity = scryfall_rarity
                 if card.type_line is None and scryfall_data.get("card_faces"):
                     # Double-faced cards: fall back to the front face's type line.
                     card.type_line = scryfall_data["card_faces"][0].get("type_line")
@@ -1026,6 +1049,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
             image_cache[image_cache_key] = card.image_url
             name_cache[image_cache_key] = card.card_name
             meta_cache[color_cache_key] = (card.cmc, card.type_line)
+            rarity_cache[image_cache_key] = card.rarity
 
         if on_progress:
             on_progress(i + 1, total, card.card_name, status)
