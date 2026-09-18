@@ -137,6 +137,7 @@ def get_variant_style(variant: Optional[str]) -> tuple[str, str, str]:
 # White Border, Promo, and plain cards all fall under "Regular".
 PREMIUM_TREATMENTS = (
     'borderless', 'extended art', 'showcase', 'retro frame', 'full art', 'future sight',
+    'alternate art',
 )
 
 
