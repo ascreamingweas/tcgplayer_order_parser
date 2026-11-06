@@ -1,11 +1,13 @@
 # TCGplayer Packing Slip Organizer
 # Makefile for common operations
 
-# Input PDF path(s) — space-separated for multi-order (max 3)
+# Input PDF path; PDF2/PDF3 add more for a multi-order pull sheet
 PDF ?=
 # Additional PDFs for multi-order pull sheets (optional)
 PDF2 ?=
 PDF3 ?=
+# TCGplayer pull sheet CSV export (alternative to PDFs; covers all open orders)
+CSV ?=
 # Output filename (optional, auto-generated from PDF name if not specified)
 OUTPUT ?=
 
@@ -17,7 +19,7 @@ VENV := venv
 PYTHON := $(VENV)/bin/python3
 PIP := $(VENV)/bin/pip
 
-.PHONY: help setup run clean list
+.PHONY: help setup run pullsheet clean list
 
 help: ## Show this help message
 	@echo "TCGplayer Packing Slip Organizer"
@@ -25,6 +27,7 @@ help: ## Show this help message
 	@echo "Usage:"
 	@echo "  make setup                    - Create virtual environment and install dependencies"
 	@echo "  make run PDF=/path/to/file.pdf - Process a packing slip PDF (full path supported)"
+	@echo "  make pullsheet CSV=/path/to/pullsheet.csv - Process a TCGplayer pull sheet CSV"
 	@echo "  make list                     - List generated HTML files in output folder"
 	@echo "  make clean                    - Remove all generated HTML files"
 	@echo ""
@@ -32,6 +35,7 @@ help: ## Show this help message
 	@echo "  make run PDF=~/Downloads/TCGplayer_PackingSlips.pdf"
 	@echo "  make run PDF=~/Downloads/slip.pdf OUTPUT=my_orders.html"
 	@echo "  make run PDF=order1.pdf PDF2=order2.pdf PDF3=order3.pdf  (multi-order)"
+	@echo "  make pullsheet CSV=~/Downloads/TCGplayer_PullSheet.csv"
 	@echo ""
 	@echo "Output files are saved to: ./$(OUTPUT_DIR)/"
 
@@ -79,6 +83,29 @@ run: $(OUTPUT_DIR) ## Process a packing slip PDF (requires PDF=<path>)
 		EXTRA_PDFS="$$EXTRA_PDFS \"$$EXPANDED_PDF3\""; \
 	fi; \
 	$(PYTHON) mtg_packing_slip_organizer.py "$$EXPANDED_PDF" $$EXTRA_PDFS -o "$$OUTPUT_FILE"
+
+pullsheet: $(OUTPUT_DIR) ## Process a TCGplayer pull sheet CSV (requires CSV=<path>)
+	@if [ -z "$(CSV)" ]; then \
+		echo "Error: Please specify a CSV file"; \
+		echo "Usage: make pullsheet CSV=<path/to/pullsheet.csv>"; \
+		exit 1; \
+	fi
+	@EXPANDED_CSV=$$(eval echo "$(CSV)"); \
+	if [ ! -f "$$EXPANDED_CSV" ]; then \
+		echo "Error: File '$$EXPANDED_CSV' not found"; \
+		exit 1; \
+	fi; \
+	if [ ! -d "$(VENV)" ]; then \
+		echo "Virtual environment not found. Run 'make setup' first."; \
+		exit 1; \
+	fi; \
+	if [ -z "$(OUTPUT)" ]; then \
+		BASENAME=$$(basename "$$EXPANDED_CSV" .csv); \
+		OUTPUT_FILE="$(OUTPUT_DIR)/$${BASENAME}_organized.html"; \
+	else \
+		OUTPUT_FILE="$(OUTPUT_DIR)/$(OUTPUT)"; \
+	fi; \
+	$(PYTHON) mtg_packing_slip_organizer.py "$$EXPANDED_CSV" -o "$$OUTPUT_FILE"
 
 list: ## List generated HTML files in output folder
 	@echo "Generated HTML files in $(OUTPUT_DIR)/:"

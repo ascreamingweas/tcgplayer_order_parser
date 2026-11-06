@@ -22,6 +22,8 @@ from mtg_packing_slip_organizer import (
     generate_html,
     fetch_scryfall_sets,
     get_set_sync_status,
+    is_pull_sheet_csv,
+    parse_pull_sheet,
 )
 
 app = FastAPI(title="MTG Packing Slip Organizer")
@@ -76,6 +78,16 @@ def index():
             }
             h1 { margin-bottom: 8px; }
             p.sub { color: #aaa; margin-top: 0; margin-bottom: 30px; }
+            .mode-toggle {
+                display: flex; gap: 4px; margin-bottom: 16px;
+                background: #16213e; border-radius: 8px; padding: 4px;
+            }
+            .mode-toggle .mode-btn {
+                margin: 0; padding: 8px 18px; font-size: 0.9em;
+                background: transparent; color: #aaa; border-radius: 6px;
+            }
+            .mode-toggle .mode-btn:hover { background: #2a2a4a; }
+            .mode-toggle .mode-btn.active { background: #6c63ff; color: #fff; }
             .upload-area {
                 border: 2px dashed #444; border-radius: 12px;
                 padding: 40px 60px; text-align: center;
@@ -180,12 +192,17 @@ def index():
     </head>
     <body>
         <h1>MTG Packing Slip Organizer</h1>
-        <p class="sub">Upload a TCGplayer packing slip PDF to generate an organized pull sheet</p>
+        <p class="sub">Upload TCGplayer packing slip PDFs or a pull sheet CSV to generate an organized pull sheet</p>
+
+        <div class="mode-toggle" id="modeToggle">
+            <button type="button" class="mode-btn active" data-mode="pdf">Packing Slips (PDF)</button>
+            <button type="button" class="mode-btn" data-mode="csv">Pull Sheet (CSV)</button>
+        </div>
 
         <div class="upload-area" id="dropZone">
             <input type="file" id="fileInput" accept=".pdf" multiple>
-            <div class="label">Drop packing slip PDFs here or click to browse</div>
-            <div class="sublabel">Upload up to 5 for a multi-order pull sheet</div>
+            <div class="label" id="dropLabel">Drop packing slip PDFs here or click to browse</div>
+            <div class="sublabel" id="dropSublabel">Upload up to 5 for a multi-order pull sheet</div>
             <div class="file-list" id="fileList"></div>
         </div>
 
@@ -220,8 +237,23 @@ def index():
             const procText = document.getElementById('procText');
             const procDetail = document.getElementById('procDetail');
 
+            // Upload modes: up to 5 packing slip PDFs, or one pull sheet CSV
+            // covering every open order.
+            const MODES = {
+                pdf: {
+                    ext: '.pdf', max: 5, kind: 'PDF', multiple: true,
+                    label: 'Drop packing slip PDFs here or click to browse',
+                    sublabel: 'Upload up to 5 for a multi-order pull sheet',
+                },
+                csv: {
+                    ext: '.csv', max: 1, kind: 'CSV', multiple: false,
+                    label: 'Drop a TCGplayer pull sheet CSV here or click to browse',
+                    sublabel: 'One export covering all open orders. Non-Magic cards are skipped.',
+                },
+            };
+            let mode = 'pdf';
+
             // Multi-file management
-            const MAX_FILES = 5;
             const GROUP_COLORS = ['#4a9eff', '#ff9800', '#66bb6a', '#ab47bc', '#ef5350'];
             const GROUP_LABELS = ['A', 'B', 'C', 'D', 'E'];
             let selectedFiles = [];
@@ -230,15 +262,38 @@ def index():
             const fileInput = document.getElementById('fileInput');
             const fileList = document.getElementById('fileList');
 
+            function setMode(newMode) {
+                mode = newMode;
+                const m = MODES[mode];
+                document.querySelectorAll('#modeToggle .mode-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === mode);
+                });
+                fileInput.accept = m.ext;
+                fileInput.multiple = m.multiple;
+                document.getElementById('dropLabel').textContent = m.label;
+                document.getElementById('dropSublabel').textContent = m.sublabel;
+                selectedFiles = [];
+                renderFileList();
+                status.textContent = '';
+                status.className = 'status';
+                submitBtn.disabled = true;
+            }
+            document.querySelectorAll('#modeToggle .mode-btn').forEach(btn => {
+                btn.addEventListener('click', () => setMode(btn.dataset.mode));
+            });
+
             function addFiles(newFiles) {
+                const m = MODES[mode];
+                // A pull sheet is a single file; dropping another replaces it.
+                if (m.max === 1) selectedFiles = [];
                 for (const file of newFiles) {
-                    if (selectedFiles.length >= MAX_FILES) {
-                        status.textContent = `Maximum ${MAX_FILES} PDFs allowed.`;
+                    if (selectedFiles.length >= m.max) {
+                        status.textContent = `Maximum ${m.max} ${m.kind}s allowed.`;
                         status.className = 'status error';
                         break;
                     }
-                    if (!file.name.toLowerCase().endsWith('.pdf')) {
-                        status.textContent = 'Please select PDF files only.';
+                    if (!file.name.toLowerCase().endsWith(m.ext)) {
+                        status.textContent = `Please select ${m.kind} files only.`;
                         status.className = 'status error';
                         continue;
                     }
@@ -342,7 +397,8 @@ def index():
                 // Show progress bar
                 processing.classList.add('active');
                 procFill.style.width = '0%';
-                procText.textContent = selectedFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
+                procText.textContent = mode === 'csv' ? 'Uploading pull sheet...'
+                    : selectedFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
                 procDetail.textContent = '';
 
                 // Step 1: Upload the files
@@ -358,7 +414,9 @@ def index():
                     }
                     const uploadData = await uploadRes.json();
                     jobId = uploadData.job_id;
-                    procText.textContent = `Parsing PDF (${uploadData.card_count} cards)...`;
+                    procText.textContent = mode === 'csv'
+                        ? `Parsed pull sheet (${uploadData.card_count} cards, ${uploadData.order_count} orders)...`
+                        : `Parsing PDF (${uploadData.card_count} cards)...`;
                     procDetail.textContent = 'Looking up card data on Scryfall...';
                 } catch (e) {
                     processing.classList.remove('active');
@@ -460,9 +518,83 @@ def refresh_sets():
     return get_set_sync_status()
 
 
+async def _read_upload(file: UploadFile) -> bytes:
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File '{file.filename}' too large (max 10 MB).")
+    return contents
+
+
+def _start_job(job: dict) -> str:
+    """Register a job and run the slow Scryfall lookup + HTML render in a background thread."""
+    job_id = uuid.uuid4().hex[:12]
+    _jobs[job_id] = {**job, "status": "processing", "progress": [], "result_html": None, "error": None}
+
+    def _process():
+        job = _jobs[job_id]
+        try:
+            def on_progress(current, total, card_name, card_status):
+                job["progress"].append({
+                    "current": current,
+                    "total": total,
+                    "card_name": card_name,
+                    "status": card_status,
+                })
+
+            fetch_colors_from_scryfall(job["cards"], on_progress=on_progress)
+            html = generate_html(
+                job["cards"],
+                order_number=job["order_number"],
+                order_numbers=job["order_numbers"],
+                buyer_name=job["buyer_name"],
+                order_names=job["order_names"],
+                pull_sheet_orders=job["pull_sheet_orders"],
+            )
+            job["result_html"] = html
+            job["status"] = "complete"
+        except Exception as e:
+            job["error"] = str(e)
+            job["status"] = "error"
+
+    Thread(target=_process, daemon=True).start()
+    return job_id
+
+
+async def _parse_pull_sheet_upload(file: UploadFile) -> dict:
+    """Handle a single TCGplayer pull sheet CSV covering many orders."""
+    contents = await _read_upload(file)
+    try:
+        text = contents.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not a UTF-8 CSV.")
+
+    cards, orders = parse_pull_sheet(text)
+    if not cards:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No Magic cards found in '{file.filename}'. Is this a TCGplayer pull sheet export?",
+        )
+
+    job_id = _start_job({
+        "cards": cards,
+        "order_number": "",
+        "order_numbers": None,
+        "buyer_name": "",
+        "order_names": None,
+        "pull_sheet_orders": orders,
+    })
+    return {"job_id": job_id, "card_count": len(cards), "order_count": len(orders)}
+
+
 @app.post("/api/parse")
 async def parse_pdf(files: list[UploadFile] = File(...)):
-    """Accept up to 5 packing slip PDFs, start processing, and return a job ID for progress tracking."""
+    """Accept up to 5 packing slip PDFs or one pull sheet CSV, start processing, and
+    return a job ID for progress tracking."""
+
+    if any(is_pull_sheet_csv(f.filename) for f in files):
+        if len(files) > 1:
+            raise HTTPException(status_code=400, detail="Upload a pull sheet CSV on its own.")
+        return await _parse_pull_sheet_upload(files[0])
 
     if len(files) > 5:
         raise HTTPException(status_code=400, detail="Maximum 5 PDFs supported.")
@@ -477,9 +609,7 @@ async def parse_pdf(files: list[UploadFile] = File(...)):
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail=f"File '{file.filename}' must be a PDF.")
 
-        contents = await file.read()
-        if len(contents) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail=f"File '{file.filename}' too large (max 10 MB).")
+        contents = await _read_upload(file)
 
         # Write to a temp file so pdfplumber can read it
         tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -516,47 +646,15 @@ async def parse_pdf(files: list[UploadFile] = File(...)):
         all_cards.extend(cards)
 
     # Create a job for the slow Scryfall lookup phase
-    job_id = uuid.uuid4().hex[:12]
     order_label = "Multi-Order Pull Sheet" if is_multi else order_numbers.get('', '')
-    _jobs[job_id] = {
-        "status": "processing",
+    job_id = _start_job({
         "cards": all_cards,
         "order_number": order_label,
         "order_numbers": order_numbers if is_multi else None,
         "buyer_name": "" if is_multi else order_names.get('', ''),
         "order_names": order_names if is_multi else None,
-        "progress": [],
-        "result_html": None,
-        "error": None,
-    }
-
-    # Run Scryfall lookups in a background thread
-    def _process():
-        job = _jobs[job_id]
-        try:
-            def on_progress(current, total, card_name, card_status):
-                job["progress"].append({
-                    "current": current,
-                    "total": total,
-                    "card_name": card_name,
-                    "status": card_status,
-                })
-
-            fetch_colors_from_scryfall(job["cards"], on_progress=on_progress)
-            html = generate_html(
-                job["cards"],
-                order_number=job["order_number"],
-                order_numbers=job["order_numbers"],
-                buyer_name=job["buyer_name"],
-                order_names=job["order_names"],
-            )
-            job["result_html"] = html
-            job["status"] = "complete"
-        except Exception as e:
-            job["error"] = str(e)
-            job["status"] = "error"
-
-    Thread(target=_process, daemon=True).start()
+        "pull_sheet_orders": None,
+    })
 
     return {"job_id": job_id, "card_count": len(all_cards), "order_count": len(files)}
 

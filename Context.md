@@ -126,6 +126,14 @@ Output files are saved to the `output/` directory.
   - Expand All / Collapse All / Reset Progress buttons
   - All state persists in browser localStorage
 
+### Pull Sheet CSV
+- `parse_pull_sheet()` - Parses TCGplayer's pull sheet export (one row per SKU across all open orders)
+- `Order Quantity` column splits a row across orders: `ORDER:QTY | ORDER:QTY`; stored on `Card.orders`
+- Final row (`Orders Contained in Pull Sheet:`) lists every order number
+- Non-Magic `Product Line` rows are skipped as cards but counted in the per-order summary
+- No prices or buyer names in the export, so pull sheets hide prices and show an order count
+- `generate_html(..., pull_sheet_orders=...)` renders order ID chips per row and a clickable orders panel
+
 ## Common Issues & Solutions
 
 ### Set Name Mismatches

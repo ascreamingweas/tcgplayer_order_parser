@@ -1,8 +1,12 @@
 # TCGplayer Packing Slip Organizer
 
-Parses TCGplayer packing slip PDFs and generates an HTML pull sheet organized by card color and rarity for easier Magic: The Gathering order fulfillment.
+Parses TCGplayer packing slip PDFs (or a TCGplayer pull sheet CSV covering all open orders) and generates an HTML pull sheet organized by card color and rarity for easier Magic: The Gathering order fulfillment.
 
 ## Features
+
+- **Pull sheet CSV support** - Drop TCGplayer's pull sheet export (every open order in one file) instead of individual packing slips. Non-Magic cards (Lorcana, Gundam, etc.) are skipped from the sheet but still counted per order
+- **Orders panel** - For pull sheets, a table of every order with its short ID, which TCGs it contains, and card counts; click an order to show only its cards (quantities adjust for cards shared between orders)
+- **Order ID chips** - Each card row in a pull sheet shows which orders it goes to and how many each, e.g. `0710DC ×1`
 
 - **Color-organized output** - Cards grouped by color (WUBRG order), then Multicolor, Colorless, and Lands
 - **Rarity sorting** - Within each color, cards sorted by rarity (Mythic → Rare → Uncommon → Common)
@@ -32,6 +36,9 @@ make setup
 # Run the organizer on a packing slip PDF (supports full paths)
 make run PDF=~/Downloads/TCGplayer_PackingSlips.pdf
 
+# Or process a TCGplayer pull sheet CSV (all open orders at once)
+make pullsheet CSV=~/Downloads/TCGplayer_PullSheet.csv
+
 # Optionally specify output filename
 make run PDF=~/Downloads/packing_slip.pdf OUTPUT=my_orders.html
 
@@ -42,8 +49,10 @@ make list
 make clean
 ```
 
+The pull sheet export has no prices or buyer names, so pull sheets show order counts instead of total value.
+
 The script will:
-1. Parse the PDF and extract all card entries
+1. Parse the PDF (or pull sheet CSV) and extract all card entries
 2. Sync the latest set list from Scryfall (ensures new sets are always supported)
 3. Look up each card's color and image on Scryfall (cached to avoid duplicate lookups)
 4. Generate an HTML file organized by color, rarity, and variant type

@@ -5,6 +5,8 @@ Parses TCGplayer packing slips and reorganizes cards by color, treatment, and ra
 Uses Scryfall API to look up card colors.
 """
 
+import csv
+import io
 import re
 import time
 import json
@@ -14,6 +16,7 @@ import urllib.error
 from pathlib import Path
 from dataclasses import dataclass
 from collections import defaultdict
+from html import escape as html_escape
 from typing import Optional
 
 from fonts_data import PLANEWALKER_CMC_WOFF2_B64, PLANEWALKER_DINGS_WOFF2_B64
@@ -45,6 +48,7 @@ class Card:
     order_group: Optional[str] = None  # 'A'-'E' for multi-order pulls
     cmc: Optional[float] = None  # Converted mana cost, from Scryfall
     type_line: Optional[str] = None  # Scryfall type line, e.g. "Creature — Elf"
+    orders: Optional[dict[str, int]] = None  # Pull-sheet mode: order number -> qty of this card
 
 
 # Rarity mapping. Mythic and Special sit at the top together, then R/U/C.
@@ -149,9 +153,20 @@ def is_premium_treatment(variant: Optional[str]) -> bool:
     return any(keyword in lower for keyword in PREMIUM_TREATMENTS)
 
 
-def treatment_bucket(variant: Optional[str]) -> str:
+# Sets where every card has a special frame even though the listing names no
+# treatment (e.g. "Dark Ritual" in Strixhaven: Mystical Archive). Matched on the set
+# name with spacing/punctuation stripped, since PDF set names come out squashed.
+PREMIUM_SETS = ('mysticalarchive',)
+
+
+def is_premium_set(set_name: Optional[str]) -> bool:
+    normalized = re.sub(r'[^a-z0-9]', '', (set_name or '').lower())
+    return any(key in normalized for key in PREMIUM_SETS)
+
+
+def treatment_bucket(variant: Optional[str], set_name: Optional[str] = None) -> str:
     """Return the treatment grouping label: 'Premium' or 'Regular'."""
-    return 'Premium' if is_premium_treatment(variant) else 'Regular'
+    return 'Premium' if is_premium_treatment(variant) or is_premium_set(set_name) else 'Regular'
 
 
 # Treatment bucket display order and labels (premium listed first).
@@ -163,7 +178,11 @@ def is_creature(type_line: Optional[str]) -> bool:
     """True when the card's type line denotes a creature (incl. artifact creatures)."""
     return bool(type_line) and 'creature' in type_line.lower()
 
-# Color order for sorting: Multicolor -> Colorless -> WUBRG -> Land
+# Section for Art Series cards. Scryfall gives them no colors, so rather than lumping
+# them into Colorless they get their own section after Lands.
+ART_CARD_COLOR = "Art"
+
+# Color order for sorting: Multicolor -> Colorless -> WUBRG -> Land -> Art Cards
 COLOR_ORDER = {
     "Multicolor": 0,
     "Colorless": 1,
@@ -173,7 +192,10 @@ COLOR_ORDER = {
     "Red": 5,
     "Green": 6,
     "Land": 7,
+    ART_CARD_COLOR: 8,
 }
+# Display names for sections whose key isn't the label shown to the user.
+COLOR_LABELS = {ART_CARD_COLOR: "Art Cards"}
 
 # Mana pips drawn from the Planewalker Dings icon set: which character each color
 # maps to, and the ink color to render it in. Colors without a glyph (e.g. Land)
@@ -230,6 +252,10 @@ TCGPLAYER_SET_OVERRIDES = {
     # TCGplayer prefixes the LTR draft set with "Universes Beyond:"; Scryfall does not.
     "Universes Beyond: The Lord of the Rings: Tales of Middle-earth": "ltr",
     "UniversesBeyond:TheLordoftheRings:TalesofMiddle-earth": "ltr",
+    # Subsets TCGplayer names "Parent: Subset" where Scryfall uses its own name.
+    "March of the Machine: Multiverse Legends": "mul",
+    "The Brothers' War: Retro Frame Artifacts": "brr",
+    "Commander: Teenage Mutant Ninja Turtles": "tmc",
 }
 
 # Global cache for Scryfall set mapping (populated on first use)
@@ -240,6 +266,13 @@ _set_prefix_cache: Optional[list] = None
 _scryfall_set_count: int = 0
 # Track the latest sets by release date (for diagnostics)
 _latest_sets: list[dict] = []
+# Parent set code -> Scryfall token set code (e.g. "blb" -> "tblb"). TCGplayer lists
+# tokens under the parent set, but Scryfall numbers them in a separate token set, so
+# "Bloomburrow #26" is Rabbit Response while "Cragflame Token #26" lives in tblb.
+_token_set_codes: dict[str, str] = {}
+# Parent set code -> Scryfall Art Series set code (e.g. "eoe" -> "aeoe"). TCGplayer
+# calls these sets "Art Series: Edge of Eternities"; Scryfall "Edge of Eternities Art Series".
+_art_series_codes: dict[str, str] = {}
 
 
 def fetch_scryfall_sets() -> dict:
@@ -248,7 +281,7 @@ def fetch_scryfall_sets() -> dict:
     to set codes. Also builds the set prefix list used for PDF parsing.
     This ensures new sets are always supported without code changes.
     """
-    global _scryfall_set_cache, _set_prefix_cache, _scryfall_set_count, _latest_sets
+    global _scryfall_set_cache, _set_prefix_cache, _scryfall_set_count, _latest_sets, _token_set_codes, _art_series_codes
 
     if _scryfall_set_cache is not None:
         return _scryfall_set_cache
@@ -263,6 +296,8 @@ def fetch_scryfall_sets() -> dict:
 
         mapping = {}
         prefixes = set()
+        token_codes = {}
+        art_codes = {}
         sets_data = data.get("data", [])
         _scryfall_set_count = len(sets_data)
 
@@ -287,6 +322,13 @@ def fetch_scryfall_sets() -> dict:
             # Skip art series, tokens, promos, etc. for the primary mapping
             # These have different collector numbers than the main sets
             set_type = set_info.get("set_type", "")
+            parent = set_info.get("parent_set_code")
+            # Prefer the conventional "t" + parent code when a set has several token sets.
+            if set_type == "token" and parent and token_codes.get(parent) != f"t{parent}":
+                token_codes[parent] = code
+            if (set_type == "memorabilia" and parent and "Art Series" in name
+                    and art_codes.get(parent) != f"a{parent}"):
+                art_codes[parent] = code
             if set_type in ("token", "memorabilia", "promo", "alchemy"):
                 continue
 
@@ -315,6 +357,8 @@ def fetch_scryfall_sets() -> dict:
 
         _scryfall_set_cache = mapping
         _set_prefix_cache = sorted(prefixes, key=len, reverse=True)
+        _token_set_codes = token_codes
+        _art_series_codes = art_codes
         print(f"  Loaded {_scryfall_set_count} sets from Scryfall ({len(prefixes)} parsing prefixes)")
         return mapping
 
@@ -378,6 +422,16 @@ def get_scryfall_set_code(set_name: str) -> Optional[str]:
     for key, code in mapping.items():
         if _normalize(key) == target:
             return code
+
+    # TCGplayer prefixes some product lines where Scryfall doesn't:
+    # "Commander: Reality Fracture" is Scryfall's "Reality Fracture Commander", and
+    # "Universes Beyond: Assassin's Creed" is just "Assassin's Creed".
+    commander_match = re.match(r'^Commander:\s*(.+)$', set_name)
+    if commander_match:
+        return get_scryfall_set_code(f"{commander_match.group(1)} Commander")
+    beyond_match = re.match(r'^Universes Beyond:\s*(.+)$', set_name)
+    if beyond_match:
+        return get_scryfall_set_code(beyond_match.group(1))
 
     return None
 
@@ -669,8 +723,10 @@ def parse_card_line(line: str) -> Optional[Card]:
     variant_parts = []
     for paren_content in all_parens:
         cleaned = add_spaces_to_card_name(paren_content)
+        # Rejoin hyphenated words split by a PDF line wrap ("Gold- Stamped").
+        cleaned = re.sub(r'(\w)-\s+(\w)', r'\1-\2', cleaned)
         # Skip purely numeric values (alternate collector number references)
-        if re.match(r'^\d+$', cleaned.strip()):
+        if re.match(r'^\d+(/\d+)?$', cleaned.strip()):
             continue
         variant_parts.append(cleaned)
     if variant_parts:
@@ -727,10 +783,58 @@ def search_scryfall_by_set(set_code: str, collector_number: str) -> Optional[dic
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
             return data
-    except urllib.error.HTTPError:
-        return None
+    except Exception:
+        pass
+
+    # Scryfall sometimes answers the direct set/number route with an HTML 400 for
+    # cards its search finds fine (seen with Art Series and some token sets), so
+    # retry the same printing through search before giving up.
+    query = urllib.parse.urlencode({"q": f'set:{set_code} cn:"{collector_number}"', "unique": "prints"})
+    try:
+        time.sleep(0.1)
+        req = urllib.request.Request(f"https://api.scryfall.com/cards/search?{query}", headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            results = json.loads(response.read().decode()).get("data", [])
+            return results[0] if results else None
     except Exception:
         return None
+
+
+def is_token_name(card_name: str) -> bool:
+    """True for TCGplayer token and emblem listings, e.g. "Cragflame Token" or
+    "Emblem - Sephiroth, One-Winged Angel // Robot Warrior Double-Sided Token"."""
+    name = card_name.strip()
+    return bool(re.search(r'\bToken$', name, re.IGNORECASE) or re.match(r'^Emblem\b', name, re.IGNORECASE))
+
+
+def art_series_parent(set_name: str) -> Optional[str]:
+    """For "Art Series: Edge of Eternities" return "Edge of Eternities", else None.
+
+    Tolerates the PDF's squashed spacing ("ArtSeries:EdgeofEternities").
+    """
+    match = re.match(r'^Art\s*Series:\s*(.+)$', set_name.strip(), re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def is_art_card(card: Card) -> bool:
+    return art_series_parent(card.set_name) is not None
+
+
+def get_lookup_set_code(set_name: str, card_name: str) -> Optional[str]:
+    """Scryfall set code to look a card up in.
+
+    TCGplayer files tokens/emblems under the parent set and art cards under
+    "Art Series: <parent>"; Scryfall keeps both in separate sets with their own
+    collector numbers, so route them there.
+    """
+    parent_name = art_series_parent(set_name)
+    if parent_name:
+        parent_code = get_scryfall_set_code(parent_name)
+        return _art_series_codes.get(parent_code) if parent_code else None
+    set_code = get_scryfall_set_code(set_name)
+    if set_code and is_token_name(card_name):
+        return _token_set_codes.get(set_code, set_code)
+    return set_code
 
 
 def search_scryfall(card_name: str, set_name: str = None, collector_number: str = None) -> Optional[dict]:
@@ -742,7 +846,7 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
     # First, try exact lookup by set code and collector number if available
     if set_name and collector_number:
         # Try to map TCGPlayer set name to Scryfall set code
-        set_code = get_scryfall_set_code(set_name)
+        set_code = get_lookup_set_code(set_name, card_name)
 
         if set_code:
             result = search_scryfall_by_set(set_code, collector_number)
@@ -923,6 +1027,149 @@ def parse_packing_slip(pdf_path: str) -> list[Card]:
     return cards
 
 
+# TCGplayer pull sheet CSV (Orders -> Pull Sheet export). One row per SKU across all
+# open orders; "Order Quantity" splits the row's quantity by order, e.g.
+# "2769C87D-293079-FAB45:1 | 2769C87D-7B2DE7-1616A:1". The last row lists every order.
+PULL_SHEET_MAGIC_LINE = "Magic"
+PULL_SHEET_FOOTER = "Orders Contained in Pull Sheet:"
+PULL_SHEET_CONDITIONS = (
+    "Near Mint", "Lightly Played", "Moderately Played", "Heavily Played", "Damaged",
+)
+PULL_SHEET_LANGUAGES = (
+    "Japanese", "German", "French", "Italian", "Spanish", "Portuguese", "Russian",
+    "Korean", "Chinese (Simplified)", "Chinese (Traditional)", "Phyrexian",
+)
+
+
+def is_pull_sheet_csv(filename: str) -> bool:
+    return filename.lower().endswith(".csv")
+
+
+def short_order_id(order_number: str) -> str:
+    """Compact order label for chips: the middle segment of "SELLER-XXXXXX-YYYYY".
+
+    The first segment is the seller's ID and is identical on every order.
+    """
+    parts = order_number.split("-")
+    return parts[1] if len(parts) == 3 else order_number
+
+
+def parse_order_quantities(value: str) -> dict[str, int]:
+    """Parse "ORDER:QTY | ORDER:QTY" into {order_number: qty}."""
+    orders = {}
+    for part in value.split("|"):
+        order_number, sep, qty = part.strip().rpartition(":")
+        if sep and order_number and qty.isdigit():
+            orders[order_number] = orders.get(order_number, 0) + int(qty)
+    return orders
+
+
+def parse_pull_sheet_condition(condition: str) -> tuple[str, bool, Optional[str]]:
+    """Split a pull sheet condition like "Near Mint Foil" into (condition, is_foil, language)."""
+    is_foil = "foil" in condition.lower()
+    language = next((lang for lang in PULL_SHEET_LANGUAGES if lang in condition), None)
+    base = next((c for c in PULL_SHEET_CONDITIONS if c in condition), None)
+    if base is None:
+        base = re.sub(r"\s*\bFoil\b", "", condition).strip() or "Near Mint"
+    return base, is_foil, language
+
+
+def parse_pull_sheet(text: str) -> tuple[list[Card], list[dict]]:
+    """Parse a TCGplayer pull sheet CSV into Magic cards plus a per-order summary.
+
+    Non-Magic rows (Lorcana, Gundam, ...) are skipped as cards but still counted in
+    the order summary, so mixed-TCG orders are visible.
+
+    Returns (cards, orders) where each order is a dict with keys order_number,
+    short_id, tcgs ({product line: qty}), total_cards, and magic_cards.
+    """
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    cards = []
+    order_tcgs: dict[str, dict[str, int]] = {}
+    skipped = 0
+
+    for row in reader:
+        product_line = (row.get("Product Line") or "").strip()
+        if product_line == PULL_SHEET_FOOTER:
+            # Footer: pipe-separated list of every order. The order number lands in
+            # the "Product Name" column; register any orders not already seen.
+            for order_number in (row.get("Product Name") or "").split("|"):
+                if order_number.strip():
+                    order_tcgs.setdefault(order_number.strip(), {})
+            continue
+        if not product_line:
+            continue
+
+        orders = parse_order_quantities(row.get("Order Quantity") or "")
+        for order_number, qty in orders.items():
+            tcgs = order_tcgs.setdefault(order_number, {})
+            tcgs[product_line] = tcgs.get(product_line, 0) + qty
+
+        if product_line != PULL_SHEET_MAGIC_LINE:
+            skipped += 1
+            continue
+
+        # Treatments ride along in parentheses: "Seasoned Cryomancer (Borderless) (0324)".
+        # Purely numeric groups ("0324", "34/81") are collector number references, not variants.
+        product_name = (row.get("Product Name") or "").strip()
+        variant_parts = [
+            p.strip() for p in re.findall(r"\(([^)]+)\)", product_name)
+            if not re.match(r"^\d+(/\d+)?$", p.strip())
+        ]
+        card_name = re.sub(r"\s*\([^)]+\)", "", product_name).strip()
+        variant = " / ".join(variant_parts) if variant_parts else None
+
+        set_name = (row.get("Set") or "").strip()
+        # Match the packing slip parser: tag promo/prerelease printings as Promo.
+        if "prerelease" in set_name.lower() or "promo" in set_name.lower():
+            variant = f"Promo / {variant}" if variant else "Promo"
+
+        condition, is_foil, language = parse_pull_sheet_condition(
+            (row.get("Condition") or "").strip()
+        )
+        # Slip rarity is a fallback only; Scryfall's rarity wins when found. Codes we
+        # don't bucket (T for tokens, P for promos) start out as Special.
+        rarity = (row.get("Rarity") or "").strip()
+        if rarity not in RARITY_ORDER:
+            rarity = "S"
+
+        quantity_text = (row.get("Quantity") or "").strip()
+        quantity = int(quantity_text) if quantity_text.isdigit() else sum(orders.values())
+
+        cards.append(Card(
+            quantity=quantity,
+            set_name=set_name,
+            card_name=card_name,
+            # Double-sided tokens list both faces ("24 // 12"); look up the front.
+            collector_number=(row.get("Number") or "").split("//")[0].strip(),
+            rarity=rarity,
+            condition=condition,
+            is_foil=is_foil,
+            price=0.0,
+            total_price=0.0,
+            variant=variant,
+            language=language,
+            orders=orders,
+        ))
+
+    # Short IDs are almost always unique; fall back to the full number on a clash.
+    short_ids = [short_order_id(o) for o in order_tcgs]
+    summaries = []
+    for order_number, tcgs in sorted(order_tcgs.items()):
+        short_id = short_order_id(order_number)
+        summaries.append({
+            "order_number": order_number,
+            "short_id": short_id if short_ids.count(short_id) == 1 else order_number,
+            "tcgs": tcgs,
+            "total_cards": sum(tcgs.values()),
+            "magic_cards": tcgs.get(PULL_SHEET_MAGIC_LINE, 0),
+        })
+
+    print(f"Parsed pull sheet: {len(cards)} Magic cards across {len(summaries)} orders "
+          f"({skipped} non-Magic rows skipped)")
+    return cards, summaries
+
+
 def get_search_name(card_name: str) -> str:
     """
     Extract the core card name for Scryfall lookup, removing variant info
@@ -939,6 +1186,9 @@ def get_search_name(card_name: str) -> str:
     search_name = re.sub(r'\(Foil Etched$', '', search_name).strip()
     search_name = re.sub(r'\(White Border$', '', search_name).strip()
     search_name = re.sub(r'\(Future Sight$', '', search_name).strip()
+    # Art cards are listed as "<Card> Art Card"; the bare name helps the fuzzy fallback.
+    # ("Token" stays: it's what routes token lookups to Scryfall's token sets.)
+    search_name = re.sub(r'\s*Art\s*Card$', '', search_name).strip()
 
     return search_name
 
@@ -955,7 +1205,7 @@ def _is_exact_printing(scryfall_data: dict, card: Card) -> bool:
         return False
     if str(scryfall_data.get("collector_number", "")) != str(card.collector_number):
         return False
-    expected_code = get_scryfall_set_code(card.set_name)
+    expected_code = get_lookup_set_code(card.set_name, card.card_name)
     return bool(expected_code) and scryfall_data.get("set") == expected_code
 
 
@@ -972,11 +1222,11 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     # Cache to avoid duplicate lookups
     # For variants, we cache by set+collector_number to get exact art
     # For color lookups, we still cache by card name
-    image_cache = {}  # (set_name, collector_number) -> image_url
-    color_cache = {}  # card_name -> color
-    name_cache = {}   # (set_name, collector_number) -> authoritative card name
-    meta_cache = {}   # card_name -> (cmc, type_line); same across printings
-    rarity_cache = {} # (set_name, collector_number) -> rarity code; per printing
+    image_cache = {}  # (set_name, collector_number, kind) -> image_url
+    color_cache = {}  # (card_name, kind) -> color
+    name_cache = {}   # (set_name, collector_number, kind) -> authoritative card name
+    meta_cache = {}   # (card_name, kind) -> (cmc, type_line); same across printings
+    rarity_cache = {} # (set_name, collector_number, kind) -> rarity code; per printing
 
     # Track failed lookups for summary
     failed_lookups = []
@@ -987,10 +1237,14 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
         search_name = get_search_name(card.card_name)
 
         # Create cache keys
+        # Tokens share set + collector number with an unrelated card ("Bloomburrow #26"
+        # is both Cragflame Token and Rabbit Response), and art cards search under the
+        # bare card name, so key every cache by kind as well.
+        kind = "art" if is_art_card(card) else "token" if is_token_name(card.card_name) else ""
         # Image cache uses set+collector for exact variant art
-        image_cache_key = (card.set_name, card.collector_number)
+        image_cache_key = (card.set_name, card.collector_number, kind)
         # Color cache uses card name (color is same across printings)
-        color_cache_key = search_name.lower().strip()
+        color_cache_key = (search_name.lower().strip(), kind)
 
         # Check if we have cached data for this exact printing
         if image_cache_key in image_cache and color_cache_key in color_cache:
@@ -1036,7 +1290,11 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 # where "To the Crystal Tower - Cryptic Command" should display as just
                 # "Cryptic Command"). We don't override on fuzzy name fallbacks, since
                 # those can resolve to a different printing or the wrong card entirely.
-                if official_name and _is_exact_printing(scryfall_data, card):
+                # Tokens, emblems, and art cards keep TCGplayer's name: Scryfall's
+                # ("Cragflame", "Bygone Colossus // Bygone Colossus") reads like the
+                # playable card and drops the back face of double-sided tokens.
+                if (official_name and _is_exact_printing(scryfall_data, card)
+                        and not is_token_name(card.card_name) and not is_art_card(card)):
                     card.card_name = official_name
             else:
                 card.color = "Colorless"
@@ -1044,6 +1302,12 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 status = "NOT FOUND"
                 failed_lookups.append(f"{card.card_name} (searched: {search_name})")
                 print(f"  [{i+1}/{total}] {card.card_name}: NOT FOUND (defaulting to Colorless)")
+
+            # Art cards have no colors or mana value on Scryfall; give them their own
+            # section instead of mixing them into Colorless.
+            if is_art_card(card):
+                card.color = ART_CARD_COLOR
+                card.cmc = None
 
             # Cache color, image, corrected name, and card metadata
             color_cache[color_cache_key] = card.color
@@ -1065,10 +1329,69 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     return cards
 
 
+def render_orders_panel(pull_sheet_orders: list[dict], cards: list[Card]) -> str:
+    """Collapsible table of every order in a pull sheet: short ID, TCGs, card counts.
+
+    Rows with Magic cards filter the sheet when clicked; non-Magic-only orders are
+    listed (so mixed batches aren't forgotten) but have nothing to filter to.
+    """
+    unique_lines = defaultdict(int)
+    for card in cards:
+        for order_number in (card.orders or {}):
+            unique_lines[order_number] += 1
+    mixed = sum(1 for o in pull_sheet_orders if set(o["tcgs"]) - {PULL_SHEET_MAGIC_LINE})
+    other_tcg_cards = sum(o["total_cards"] - o["magic_cards"] for o in pull_sheet_orders)
+
+    rows = ""
+    for o in pull_sheet_orders:
+        number = html_escape(o["order_number"])
+        badges = "".join(
+            f'<span class="tcg-badge{"" if tcg == PULL_SHEET_MAGIC_LINE else " other-tcg"}">'
+            f'{html_escape(tcg)} ×{qty}</span>'
+            for tcg, qty in sorted(o["tcgs"].items(), key=lambda t: t[0] != PULL_SHEET_MAGIC_LINE)
+        )
+        if o["magic_cards"]:
+            row_attrs = f' data-filter-group="{number}" onclick="toggleOrderFilter(this.dataset.filterGroup)"'
+        else:
+            row_attrs = ' class="no-magic" title="No Magic cards — pull this order separately"'
+        rows += f"""            <tr{row_attrs}>
+                <td><span class="order-chip">{html_escape(o["short_id"])}</span><span class="order-full-number">{number}</span></td>
+                <td>{badges or '—'}</td>
+                <td class="num">{unique_lines.get(o["order_number"], 0)}</td>
+                <td class="num">{o["magic_cards"]}</td>
+                <td class="num">{o["total_cards"]}</td>
+            </tr>
+"""
+
+    notes = []
+    if mixed:
+        notes.append(f"{mixed} order{'s' if mixed != 1 else ''} include non-Magic cards")
+    if other_tcg_cards:
+        notes.append(f"{other_tcg_cards} non-Magic card{'s' if other_tcg_cards != 1 else ''} not on this sheet")
+    note_text = f" — {'; '.join(notes)}" if notes else ""
+
+    return f"""
+    <details class="orders-panel">
+        <summary>Orders in this pull sheet ({len(pull_sheet_orders)}){note_text}</summary>
+        <div class="order-filter-hint">Click an order to focus on just its cards<button class="order-filter-all" onclick="showAllOrders()">Show all</button></div>
+        <table class="orders-table">
+            <thead><tr><th>Order</th><th>TCGs</th><th class="num">Magic lines</th><th class="num">Magic cards</th><th class="num">All cards</th></tr></thead>
+            <tbody>
+{rows}            </tbody>
+        </table>
+    </details>
+"""
+
+
 def generate_html(cards: list[Card], output_path: str = None, order_number: str = "",
                    order_numbers: dict[str, str] = None, buyer_name: str = "",
-                   order_names: dict[str, str] = None):
-    """Generate an HTML page organized by color, treatment, and rarity."""
+                   order_names: dict[str, str] = None, pull_sheet_orders: list[dict] = None):
+    """Generate an HTML page organized by color, treatment, and rarity.
+
+    pull_sheet_orders (from parse_pull_sheet) switches to pull-sheet mode: rows carry
+    order ID chips, an orders panel replaces the A-E legend, and prices are hidden
+    since the pull sheet export doesn't include them.
+    """
     import hashlib
 
     # Create a unique generation ID from the card data so progress resets on new orders
@@ -1086,11 +1409,21 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     if not order_names:
         order_names = {}
 
+    # Pull-sheet mode: filter by full order number. Only orders with Magic cards are
+    # filterable; non-Magic-only orders still appear in the orders panel.
+    is_pull_sheet = pull_sheet_orders is not None
+    short_ids = {o["order_number"]: o["short_id"] for o in (pull_sheet_orders or [])}
+    if is_pull_sheet:
+        filter_groups = [o["order_number"] for o in pull_sheet_orders if o["magic_cards"]]
+    else:
+        filter_groups = active_groups
+    has_order_filter = is_multi_order or (is_pull_sheet and len(filter_groups) > 1)
+
     # Group cards by color, then treatment (Premium/Regular), then rarity.
     organized = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
     for card in cards:
-        organized[card.color][treatment_bucket(card.variant)][card.rarity].append(card)
+        organized[card.color][treatment_bucket(card.variant, card.set_name)][card.rarity].append(card)
 
     # Sort colors
     sorted_colors = sorted(organized.keys(), key=lambda c: COLOR_ORDER.get(c, 99))
@@ -1098,6 +1431,13 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     # Calculate totals
     total_cards = sum(card.quantity for card in cards)
     total_value = sum(card.total_price for card in cards)
+
+    if is_pull_sheet:
+        header_label = f"TCGplayer Pull Sheet — {len(pull_sheet_orders)} orders"
+        second_stat = (len(pull_sheet_orders), "Orders")
+    else:
+        header_label = (order_number or 'TCGplayer Order') + (f' — {buyer_name}' if buyer_name else '')
+        second_stat = (f"${total_value:.2f}", "Total Value")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1260,6 +1600,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .color-Multicolor {{ background: linear-gradient(135deg, #c9a227, #ffd700); }}
         .color-Colorless {{ background: linear-gradient(135deg, #9e9e9e, #bdbdbd); }}
         .color-Land {{ background: linear-gradient(135deg, #795548, #a1887f); }}
+        .color-Art {{ background: linear-gradient(135deg, #5c6bc0, #9fa8da); }}
 
         .header-White {{ background: linear-gradient(90deg, rgba(248,246,216,0.3), transparent); }}
         .header-Blue {{ background: linear-gradient(90deg, rgba(14,104,171,0.3), transparent); }}
@@ -1269,6 +1610,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .header-Multicolor {{ background: linear-gradient(90deg, rgba(201,162,39,0.3), transparent); }}
         .header-Colorless {{ background: linear-gradient(90deg, rgba(158,158,158,0.3), transparent); }}
         .header-Land {{ background: linear-gradient(90deg, rgba(121,85,72,0.3), transparent); }}
+        .header-Art {{ background: linear-gradient(90deg, rgba(92,107,192,0.3), transparent); }}
 
         .treatment-header {{
             display: flex;
@@ -1466,6 +1808,75 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .card-item.multi-order {{
             grid-template-columns: 30px 40px 1fr auto;
         }}
+        .card-item.no-price {{
+            grid-template-columns: 40px 1fr;
+        }}
+        /* Pull-sheet order chips: short order ID and how many go to that order */
+        .card-orders {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 4px;
+        }}
+        .order-chip {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.75em;
+            color: #c5cae9;
+            background: rgba(108,99,255,0.18);
+            border: 1px solid rgba(108,99,255,0.45);
+            border-radius: 10px;
+            padding: 1px 8px;
+        }}
+        .order-chip.dim {{ opacity: 0.3; }}
+        /* Pull-sheet orders panel */
+        .orders-panel {{
+            max-width: 900px;
+            margin: 0 auto 20px;
+            background: #16213e;
+            border-radius: 8px;
+            padding: 10px 18px;
+        }}
+        .orders-panel > summary {{
+            cursor: pointer;
+            color: #ccc;
+            font-weight: 600;
+            padding: 4px 0;
+        }}
+        .orders-panel .order-filter-hint {{ margin: 10px 0; }}
+        .orders-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }}
+        .orders-table th {{
+            text-align: left;
+            color: #888;
+            font-weight: 500;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding: 6px 8px;
+        }}
+        .orders-table td {{
+            padding: 6px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: #ccc;
+        }}
+        .orders-table td.num {{ text-align: right; }}
+        .orders-table tr[data-filter-group] {{ cursor: pointer; user-select: none; }}
+        .orders-table tr[data-filter-group]:hover {{ background: rgba(255,255,255,0.05); }}
+        .orders-table tr.inactive {{ opacity: 0.35; }}
+        .orders-table tr.soloed {{ background: rgba(108,99,255,0.18); }}
+        .orders-table tr.no-magic td {{ color: #777; }}
+        .order-full-number {{ color: #777; font-size: 0.85em; margin-left: 6px; }}
+        .tcg-badge {{
+            display: inline-block;
+            font-size: 0.8em;
+            border-radius: 10px;
+            padding: 1px 8px;
+            margin: 1px 4px 1px 0;
+            background: rgba(255,255,255,0.08);
+            color: #ccc;
+        }}
+        .tcg-badge.other-tcg {{ background: rgba(255,152,0,0.2); color: #ffb74d; }}
         /* Order group legend */
         .order-legend {{
             display: flex;
@@ -1670,7 +2081,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     <div id="card-preview"><img src="" alt="Card Preview"></div>
 
     <h1><span class="title-flourish">ó</span>MTG Order - Pull Sheet<span class="title-flourish">ô</span></h1>
-    <div class="order-info">{order_number if order_number else 'TCGplayer Order'}{f' — {buyer_name}' if buyer_name else ''}</div>
+    <div class="order-info">{html_escape(header_label)}</div>
 
     <div class="progress-text">Progress: <span id="progress-count">0</span> / <span id="progress-total">{len(cards)}</span> items pulled</div>
     <div class="progress-bar">
@@ -1683,8 +2094,8 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             <div class="label">Total Cards</div>
         </div>
         <div class="summary-item">
-            <div class="number">${total_value:.2f}</div>
-            <div class="label">Total Value</div>
+            <div class="number">{second_stat[0]}</div>
+            <div class="label">{second_stat[1]}</div>
         </div>
         <div class="summary-item">
             <div class="number">{len(cards)}</div>
@@ -1709,7 +2120,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
             <div class="order-legend-label">({sum(1 for c in cards if c.order_group == g)} unique / {sum(c.quantity for c in cards if c.order_group == g)} total cards — ${sum(c.total_price for c in cards if c.order_group == g):.2f})</div>
         </div>
 ''' for g in active_groups) + '''    </div>
-''' if is_multi_order else ''}
+''' if is_multi_order else ''}{render_orders_panel(pull_sheet_orders, cards) if is_pull_sheet else ''}
 
     <nav class="nav">
         <div class="nav-links">
@@ -1719,7 +2130,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     for color in sorted_colors:
         color_cards = organized[color]
         section_total = sum(1 for treat in color_cards.values() for rarity in treat.values() for _ in rarity)
-        html += f'            <a href="#{color.lower()}" class="nav-link color-{color}" data-section="{color.lower()}">{color} <span class="nav-progress">(<span class="nav-remaining">{section_total}</span>/{section_total})</span></a>\n'
+        html += f'            <a href="#{color.lower()}" class="nav-link color-{color}" data-section="{color.lower()}">{COLOR_LABELS.get(color, color)} <span class="nav-progress">(<span class="nav-remaining">{section_total}</span>/{section_total})</span></a>\n'
 
     html += """        </div>
         <div class="nav-controls">
@@ -1757,7 +2168,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     <div class="color-section" id="{color.lower()}" data-section-total="{section_item_count}">
         <div class="color-header header-{color}" onclick="toggleSection(this.parentElement)">
             {pip_html}
-            {color} ({color_total} cards)
+            {COLOR_LABELS.get(color, color)} ({color_total} cards)
             <span class="section-progress"><span class="section-remaining">{section_item_count}</span> remaining</span>
             <span class="collapse-icon">▼</span>
         </div>
@@ -1811,11 +2222,27 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                         group = card.order_group
                         order_pill = f'<div class="order-pill order-pill-{group}">{group}</div>'
                         multi_class = ' multi-order'
-                        data_group = f' data-group="{group}"'
+                        data_group = f' data-groups="{group}"'
                     else:
                         order_pill = ''
                         multi_class = ''
                         data_group = ''
+
+                    # Pull-sheet mode: one chip per order this card goes to, and no
+                    # price column (the export has no prices).
+                    if is_pull_sheet:
+                        card_orders = card.orders or {}
+                        order_chips = '<div class="card-orders">' + "".join(
+                            f'<span class="order-chip" data-order="{html_escape(o)}" data-qty="{q}" title="{html_escape(o)}">'
+                            f'{html_escape(short_ids.get(o, short_order_id(o)))} ×{q}</span>'
+                            for o, q in card_orders.items()
+                        ) + '</div>'
+                        data_group = f' data-groups="{html_escape(" ".join(card_orders))}"'
+                        multi_class = ' no-price'
+                        price_html = ''
+                    else:
+                        order_chips = ''
+                        price_html = f'<div class="card-price">${card.total_price:.2f}</div>'
 
                     # Card-type ring (only when Scryfall gave us a type line)
                     if card.type_line is None:
@@ -1840,8 +2267,9 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                     <div class="card-info">
                         <div class="card-name">{cmc_chip}{safe_card_name}{variant_badge}{foil_badge}{language_badge}</div>
                         <div class="card-details">{safe_set_name} #{card.collector_number} - {card.condition}</div>
+                        {order_chips}
                     </div>
-                    <div class="card-price">${card.total_price:.2f}</div>
+                    {price_html}
                 </div>
 """
                     card_index += 1
@@ -1859,8 +2287,8 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     html += f"""
     <script>
         // Multi-order view filter state
-        const isMultiOrder = {str(is_multi_order).lower()};
-        const orderGroups = {list(active_groups)};
+        const isMultiOrder = {str(has_order_filter).lower()};
+        const orderGroups = {json.dumps(list(filter_groups))};
         let activeGroups = new Set(orderGroups);
 
         function updateProgress() {{
@@ -1973,8 +2401,22 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
         function applyOrderFilter() {{
             // Show/hide individual cards by their order group.
-            document.querySelectorAll('.card-item[data-group]').forEach((item) => {{
-                item.classList.toggle('filtered-out', !activeGroups.has(item.dataset.group));
+            // A card may belong to several orders (pull sheets); show it if any is active.
+            const showingAll = allActive();
+            document.querySelectorAll('.card-item[data-groups]').forEach((item) => {{
+                const groups = item.dataset.groups.split(' ');
+                item.classList.toggle('filtered-out', !groups.some((g) => activeGroups.has(g)));
+                // Pull-sheet rows: quantity reflects only the orders being shown.
+                const chips = item.querySelectorAll('.order-chip[data-order]');
+                if (chips.length) {{
+                    let qty = 0;
+                    chips.forEach((chip) => {{
+                        const active = activeGroups.has(chip.dataset.order);
+                        if (active) {{ qty += parseInt(chip.dataset.qty, 10); }}
+                        chip.classList.toggle('dim', !showingAll && !active);
+                    }});
+                    item.querySelector('.card-qty').textContent = qty + 'x';
+                }}
             }});
             // Hide rarity sub-sections that have no visible cards.
             document.querySelectorAll('.rarity-section').forEach((rs) => {{
@@ -1991,9 +2433,8 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                 const navLink = document.querySelector('.nav-link[data-section="' + section.id + '"]');
                 if (navLink) {{ navLink.style.display = hasVisible ? '' : 'none'; }}
             }});
-            // Reflect state in the legend controls.
-            const showingAll = allActive();
-            document.querySelectorAll('.order-legend-item[data-filter-group]').forEach((el) => {{
+            // Reflect state in the legend controls (A-E legend or pull-sheet orders table).
+            document.querySelectorAll('[data-filter-group]').forEach((el) => {{
                 const g = el.dataset.filterGroup;
                 el.classList.toggle('inactive', !activeGroups.has(g));
                 el.classList.toggle('soloed', !showingAll && activeGroups.has(g));
@@ -2134,9 +2575,11 @@ def main():
 
     if len(sys.argv) < 2:
         print("Usage: python mtg_packing_slip_organizer.py <slip1.pdf> [slip2.pdf] [slip3.pdf] [-o output.html]")
+        print("       python mtg_packing_slip_organizer.py <pull_sheet.csv> [-o output.html]")
         print("\nThis tool parses TCGplayer packing slips and generates an HTML page")
         print("organized by card color, treatment, and rarity for easier order fulfillment.")
-        print("Pass up to 5 PDFs to merge into a single multi-order pull sheet.")
+        print("Pass up to 5 PDFs to merge into a single multi-order pull sheet, or a single")
+        print("TCGplayer pull sheet CSV export covering all open orders.")
         sys.exit(1)
 
     # Parse arguments: PDF files and optional -o output path
@@ -2164,6 +2607,19 @@ def main():
 
     if not output_path:
         output_path = pdf_paths[0].rsplit('.', 1)[0] + '_organized.html'
+
+    if any(is_pull_sheet_csv(p) for p in pdf_paths):
+        if len(pdf_paths) > 1:
+            print("Error: Pass a pull sheet CSV on its own, without other files.")
+            sys.exit(1)
+        cards, orders = parse_pull_sheet(Path(pdf_paths[0]).read_text(encoding="utf-8-sig"))
+        if not cards:
+            print("No Magic cards found in the pull sheet.")
+            sys.exit(1)
+        cards = fetch_colors_from_scryfall(cards)
+        generate_html(cards, output_path, pull_sheet_orders=orders)
+        print(f"\nDone! Open {output_path} in your browser.")
+        return
 
     group_labels = ['A', 'B', 'C', 'D', 'E']
     all_cards = []
