@@ -134,6 +134,13 @@ Output files are saved to the `output/` directory.
 - No prices or buyer names in the export, so pull sheets hide prices and show an order count
 - `generate_html(..., pull_sheet_orders=...)` renders order ID chips per row and a clickable orders panel
 
+### Bulk Fulfillment
+- `fulfillment.py` - Parses the shipping export (`parse_shipping_export`), tells CSVs apart by header (`csv_kind`), joins orders across both files (`build_orders`), and holds the Labels / Pack / Set aside step markup, CSS, and JS
+- `generate_html(..., shipments=...)` (pull-sheet mode only) wraps the pull sheet in a `step-pull` panel and embeds `<script id="fulfillment-data">` with orders, cards (by `data-index`), and label layouts
+- Which orders are bulk is decided in the report's JS so its limits (shipping $5, value $50) can change live; sealed Magic is counted under the `Magic Sealed` line by `parse_pull_sheet`
+- `labels.py` - Label layouts (`PRESETS`) and the reportlab PDF renderer behind `POST /api/labels.pdf`
+- localStorage: `bulk-settings` (label settings, shared across batches), `bulk-<generationId>-printed|packed|excluded|step`
+
 ## Common Issues & Solutions
 
 ### Set Name Mismatches

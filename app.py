@@ -12,7 +12,11 @@ from threading import Thread
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel
+
+import fulfillment
+import labels
 
 from mtg_packing_slip_organizer import (
     parse_packing_slip,
@@ -246,9 +250,9 @@ def index():
                     sublabel: 'Upload up to 5 for a multi-order pull sheet',
                 },
                 csv: {
-                    ext: '.csv', max: 1, kind: 'CSV', multiple: false,
-                    label: 'Drop a TCGplayer pull sheet CSV here or click to browse',
-                    sublabel: 'One export covering all open orders. Non-Magic cards are skipped.',
+                    ext: '.csv', max: 2, kind: 'CSV', multiple: true,
+                    label: 'Drop the TCGplayer pull sheet CSV here, plus the shipping export for labels',
+                    sublabel: 'Add the shipping export too to print labels and pack bulk orders. Non-Magic cards are skipped.',
                 },
             };
             let mode = 'pdf';
@@ -284,8 +288,9 @@ def index():
 
             function addFiles(newFiles) {
                 const m = MODES[mode];
-                // A pull sheet is a single file; dropping another replaces it.
-                if (m.max === 1) selectedFiles = [];
+                // CSV mode takes the pull sheet and the shipping export; a file with the same
+                // name replaces the earlier one.
+                if (mode === 'csv') selectedFiles = selectedFiles.filter(f => ![...newFiles].some(n => n.name === f.name));
                 for (const file of newFiles) {
                     if (selectedFiles.length >= m.max) {
                         status.textContent = `Maximum ${m.max} ${m.kind}s allowed.`;
@@ -315,7 +320,7 @@ def index():
             function renderFileList() {
                 if (selectedFiles.length === 0) { fileList.innerHTML = ''; return; }
                 fileList.innerHTML = selectedFiles.map((f, i) => {
-                    const showGroup = selectedFiles.length > 1;
+                    const showGroup = mode === 'pdf' && selectedFiles.length > 1;
                     const groupBadge = showGroup
                         ? `<span class="file-group" style="background:${GROUP_COLORS[i]}">${GROUP_LABELS[i]}</span>`
                         : '';
@@ -527,7 +532,8 @@ async def _read_upload(file: UploadFile) -> bytes:
 
 def _start_job(job: dict) -> str:
     """Register a job and run the slow Scryfall lookup + HTML render in a background thread."""
-    job_id = uuid.uuid4().hex[:12]
+    # Full-length so a report URL (which can hold buyer addresses) can't be guessed.
+    job_id = uuid.uuid4().hex
     _jobs[job_id] = {**job, "status": "processing", "progress": [], "result_html": None, "error": None}
 
     def _process():
@@ -549,6 +555,7 @@ def _start_job(job: dict) -> str:
                 buyer_name=job["buyer_name"],
                 order_names=job["order_names"],
                 pull_sheet_orders=job["pull_sheet_orders"],
+                shipments=job.get("shipments"),
             )
             job["result_html"] = html
             job["status"] = "complete"
@@ -560,20 +567,42 @@ def _start_job(job: dict) -> str:
     return job_id
 
 
-async def _parse_pull_sheet_upload(file: UploadFile) -> dict:
-    """Handle a single TCGplayer pull sheet CSV covering many orders."""
-    contents = await _read_upload(file)
-    try:
-        text = contents.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not a UTF-8 CSV.")
+async def _parse_pull_sheet_upload(files: list[UploadFile]) -> dict:
+    """Handle a TCGplayer pull sheet CSV covering many orders, optionally with the
+    matching shipping export CSV (which turns on the bulk fulfillment steps)."""
+    texts: dict[str, tuple[str, str]] = {}  # kind -> (filename, text)
+    for file in files:
+        contents = await _read_upload(file)
+        try:
+            text = contents.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not a UTF-8 CSV.")
+        kind = fulfillment.csv_kind(text)
+        if kind == "unknown":
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{file.filename}' isn't a TCGplayer pull sheet or shipping export.",
+            )
+        if kind in texts:
+            raise HTTPException(status_code=400, detail="Upload one pull sheet and one shipping export, not two of the same.")
+        texts[kind] = (file.filename, text)
 
+    if "pull_sheet" not in texts:
+        raise HTTPException(status_code=400, detail="Add the pull sheet CSV too; it lists the cards to pull.")
+    filename, text = texts["pull_sheet"]
     cards, orders = parse_pull_sheet(text)
     if not cards:
         raise HTTPException(
             status_code=422,
-            detail=f"No Magic cards found in '{file.filename}'. Is this a TCGplayer pull sheet export?",
+            detail=f"No Magic cards found in '{filename}'. Is this a TCGplayer pull sheet export?",
         )
+
+    shipments = None
+    if "shipping_export" in texts:
+        try:
+            shipments = fulfillment.parse_shipping_export(texts["shipping_export"][1])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     job_id = _start_job({
         "cards": cards,
@@ -582,19 +611,23 @@ async def _parse_pull_sheet_upload(file: UploadFile) -> dict:
         "buyer_name": "",
         "order_names": None,
         "pull_sheet_orders": orders,
+        "shipments": shipments,
     })
     return {"job_id": job_id, "card_count": len(cards), "order_count": len(orders)}
 
 
 @app.post("/api/parse")
 async def parse_pdf(files: list[UploadFile] = File(...)):
-    """Accept up to 5 packing slip PDFs or one pull sheet CSV, start processing, and
-    return a job ID for progress tracking."""
+    """Accept up to 5 packing slip PDFs, or a pull sheet CSV plus an optional shipping
+    export CSV, start processing, and return a job ID for progress tracking."""
 
     if any(is_pull_sheet_csv(f.filename) for f in files):
-        if len(files) > 1:
-            raise HTTPException(status_code=400, detail="Upload a pull sheet CSV on its own.")
-        return await _parse_pull_sheet_upload(files[0])
+        if len(files) > 2 or not all(is_pull_sheet_csv(f.filename) for f in files):
+            raise HTTPException(
+                status_code=400,
+                detail="Upload the pull sheet CSV on its own or with its shipping export CSV.",
+            )
+        return await _parse_pull_sheet_upload(files)
 
     if len(files) > 5:
         raise HTTPException(status_code=400, detail="Maximum 5 PDFs supported.")
@@ -712,3 +745,19 @@ async def get_report(job_id: str):
     if html is None:
         raise HTTPException(status_code=404, detail="Report not found or expired.")
     return HTMLResponse(content=html)
+
+
+class LabelRequest(BaseModel):
+    shipments: list[dict]
+    settings: dict = {}
+
+
+@app.post("/api/labels.pdf")
+def labels_pdf(req: LabelRequest):
+    """Render address labels for the bulk orders the report sends."""
+    try:
+        pdf = labels.render_pdf(req.shipments, req.settings)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": 'inline; filename="shipping-labels.pdf"'})

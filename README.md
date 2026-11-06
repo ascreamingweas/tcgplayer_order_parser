@@ -7,6 +7,7 @@ Parses TCGplayer packing slip PDFs (or a TCGplayer pull sheet CSV covering all o
 - **Pull sheet CSV support** - Drop TCGplayer's pull sheet export (every open order in one file) instead of individual packing slips. Non-Magic cards (Lorcana, Gundam, etc.) are skipped from the sheet but still counted per order
 - **Orders panel** - For pull sheets, a table of every order with its short ID, which TCGs it contains, and card counts; click an order to show only its cards (quantities adjust for cards shared between orders)
 - **Order ID chips** - Each card row in a pull sheet shows which orders it goes to and how many each, e.g. `0710DC ×1`
+- **Bulk fulfillment** - Upload the pull sheet together with TCGplayer's shipping export and the report becomes a set of steps (see below)
 
 - **Color-organized output** - Cards grouped by color (WUBRG order), then Multicolor, Colorless, and Lands
 - **Rarity sorting** - Within each color, cards sorted by rarity (Mythic → Rare → Uncommon → Common)
@@ -18,6 +19,20 @@ Parses TCGplayer packing slip PDFs (or a TCGplayer pull sheet CSV covering all o
 - **Interactive HTML** - Click cards to mark them as pulled; progress persists in your browser
 - **Scryfall integration** - Automatically syncs set list and looks up card data via the Scryfall API
 - **Double-faced card support** - Transform and modal cards are classified by their front face
+
+## Bulk fulfillment (pull sheet + shipping export)
+
+Choose **Pull Sheet (CSV)** and drop both CSVs from TCGplayer: the pull sheet and the shipping export for the same orders (either order). The report then has steps:
+
+1. **Upload** - back to the start for a new batch.
+2. **Pull** - the usual color/rarity pull sheet with every Magic single from every order. Each order chip shows its label number (`#4 F1175B ×1`); orders outside the bulk process have a dashed orange chip, and hovering it says why.
+3. **Labels** - address labels for the bulk orders, numbered #1, #2, ... Pick a layout (4, 2, 6 or 1 per Rollo 4x6 sheet, address-label rolls, or a custom size), the matching line (`#4 · F1175B · 2x` by default; the count never says "cards"), capitals, cut lines, and an optional return address. The preview is the PDF you print. Mark labels printed so the next pass can hide them.
+4. **Pack** - one box per label number with the cards that go in that envelope. Click a card once it's in; the envelope shows packed when every card is in.
+5. **Set aside** - orders to fulfill another way, with the reason and their Magic cards.
+
+An order is **bulk** when it paid at most $5.00 shipping, is worth under $50, holds only Magic singles, ships within the US, and is in both files. Orders with sealed Magic (pull sheet rows with no card number or rarity) or another game are set aside, but their Magic singles are still on the pull sheet. Both dollar limits are settings on the Labels step. Orders with more than 15 cards (also a setting) stay bulk but get flagged.
+
+Labels are built by the web app (`/api/labels.pdf`), so run `make serve` (or use the deployed site). A report made with `make pullsheet CSV=... SHIP=...` has every step, but printing labels from it needs the web app. Settings carry over between batches; printed and packed marks are kept per batch in your browser.
 
 ## Installation
 
@@ -38,6 +53,9 @@ make run PDF=~/Downloads/TCGplayer_PackingSlips.pdf
 
 # Or process a TCGplayer pull sheet CSV (all open orders at once)
 make pullsheet CSV=~/Downloads/TCGplayer_PullSheet.csv
+
+# Run the web app (needed to print labels) at http://localhost:8000
+make serve
 
 # Optionally specify output filename
 make run PDF=~/Downloads/packing_slip.pdf OUTPUT=my_orders.html

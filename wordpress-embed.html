@@ -155,9 +155,9 @@
       sublabel: 'Upload up to 5 for a multi-order pull sheet',
     },
     csv: {
-      ext: '.csv', max: 1, kind: 'CSV', multiple: false,
-      label: 'Drop a TCGplayer pull sheet CSV here or click to browse',
-      sublabel: 'One export covering all open orders. Non-Magic cards are skipped.',
+      ext: '.csv', max: 2, kind: 'CSV', multiple: true,
+      label: 'Drop the TCGplayer pull sheet CSV here, plus the shipping export for labels',
+      sublabel: 'Add the shipping export too to print labels and pack bulk orders. Non-Magic cards are skipped.',
     },
   };
   let mode = 'pdf';
@@ -192,8 +192,9 @@
 
   function addFiles(newFiles) {
     const m = MODES[mode];
-    // A pull sheet is a single file; dropping another replaces it.
-    if (m.max === 1) selectedFiles = [];
+    // CSV mode takes the pull sheet and the shipping export; a file with the same
+    // name replaces the earlier one.
+    if (mode === 'csv') selectedFiles = selectedFiles.filter(f => ![...newFiles].some(n => n.name === f.name));
     for (const file of newFiles) {
       if (selectedFiles.length >= m.max) {
         status.textContent = `Maximum ${m.max} ${m.kind}s allowed.`;
@@ -226,7 +227,7 @@
       return;
     }
     fileList.innerHTML = selectedFiles.map((f, i) => {
-      const showGroup = selectedFiles.length > 1;
+      const showGroup = mode === 'pdf' && selectedFiles.length > 1;
       const groupBadge = showGroup
         ? `<span class="file-group" style="background:${GROUP_COLORS[i]}">${GROUP_LABELS[i]}</span>`
         : '';

@@ -19,6 +19,7 @@ from collections import defaultdict
 from html import escape as html_escape
 from typing import Optional
 
+import fulfillment
 from fonts_data import PLANEWALKER_CMC_WOFF2_B64, PLANEWALKER_DINGS_WOFF2_B64
 
 # Try to import pdfplumber, provide helpful error if not available
@@ -1031,6 +1032,7 @@ def parse_packing_slip(pdf_path: str) -> list[Card]:
 # open orders; "Order Quantity" splits the row's quantity by order, e.g.
 # "2769C87D-293079-FAB45:1 | 2769C87D-7B2DE7-1616A:1". The last row lists every order.
 PULL_SHEET_MAGIC_LINE = "Magic"
+PULL_SHEET_MAGIC_SEALED_LINE = "Magic Sealed"
 PULL_SHEET_FOOTER = "Orders Contained in Pull Sheet:"
 PULL_SHEET_CONDITIONS = (
     "Near Mint", "Lightly Played", "Moderately Played", "Heavily Played", "Damaged",
@@ -1099,6 +1101,12 @@ def parse_pull_sheet(text: str) -> tuple[list[Card], list[dict]]:
             continue
         if not product_line:
             continue
+
+        # Sealed Magic (boosters, decks) has no collector number or rarity; it's
+        # counted under its own line so the order shows it isn't singles-only.
+        if (product_line == PULL_SHEET_MAGIC_LINE and not (row.get("Number") or "").strip()
+                and not (row.get("Rarity") or "").strip()):
+            product_line = PULL_SHEET_MAGIC_SEALED_LINE
 
         orders = parse_order_quantities(row.get("Order Quantity") or "")
         for order_number, qty in orders.items():
@@ -1385,12 +1393,16 @@ def render_orders_panel(pull_sheet_orders: list[dict], cards: list[Card]) -> str
 
 def generate_html(cards: list[Card], output_path: str = None, order_number: str = "",
                    order_numbers: dict[str, str] = None, buyer_name: str = "",
-                   order_names: dict[str, str] = None, pull_sheet_orders: list[dict] = None):
+                   order_names: dict[str, str] = None, pull_sheet_orders: list[dict] = None,
+                   shipments: list = None):
     """Generate an HTML page organized by color, treatment, and rarity.
 
     pull_sheet_orders (from parse_pull_sheet) switches to pull-sheet mode: rows carry
     order ID chips, an orders panel replaces the A-E legend, and prices are hidden
     since the pull sheet export doesn't include them.
+
+    shipments (from fulfillment.parse_shipping_export, pull-sheet mode only) adds the
+    bulk fulfillment steps: Labels, Pack, and Set aside.
     """
     import hashlib
 
@@ -1412,6 +1424,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     # Pull-sheet mode: filter by full order number. Only orders with Magic cards are
     # filterable; non-Magic-only orders still appear in the orders panel.
     is_pull_sheet = pull_sheet_orders is not None
+    is_bulk = is_pull_sheet and shipments is not None
     short_ids = {o["order_number"]: o["short_id"] for o in (pull_sheet_orders or [])}
     if is_pull_sheet:
         filter_groups = [o["order_number"] for o in pull_sheet_orders if o["magic_cards"]]
@@ -2074,7 +2087,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                 display: none;
             }}
         }}
-    </style>
+{fulfillment.FULFILLMENT_CSS if is_bulk else ''}    </style>
 </head>
 <body>
     <!-- Card image hover preview -->
@@ -2082,6 +2095,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
     <h1><span class="title-flourish">ó</span>MTG Order - Pull Sheet<span class="title-flourish">ô</span></h1>
     <div class="order-info">{html_escape(header_label)}</div>
+{fulfillment.steps_nav(len(pull_sheet_orders)) + '    <section class="step-panel" id="step-pull">' if is_bulk else ''}
 
     <div class="progress-text">Progress: <span id="progress-count">0</span> / <span id="progress-total">{len(cards)}</span> items pulled</div>
     <div class="progress-bar">
@@ -2143,6 +2157,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
     # Add card sections
     card_index = 0
+    cards_in_page_order = []
     for color in sorted_colors:
         color_cards = organized[color]  # treatment -> rarity -> [cards]
         sorted_treatments = sorted(color_cards.keys(), key=lambda t: TREATMENT_ORDER.get(t, 99))
@@ -2273,6 +2288,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                 </div>
 """
                     card_index += 1
+                    cards_in_page_order.append(card)
 
                 html += """                </div>
             </div>
@@ -2283,6 +2299,13 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
         html += """    </div>
 """
+
+    if is_bulk:
+        orders_data = fulfillment.build_orders(pull_sheet_orders, shipments)
+        html += "    </section>\n" + fulfillment.step_panels()
+        html += ('    <script type="application/json" id="fulfillment-data">'
+                 + fulfillment.report_data(orders_data, fulfillment.card_records(cards_in_page_order))
+                 + '</script>\n')
 
     html += f"""
     <script>
@@ -2523,41 +2546,42 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         const preview = document.getElementById('card-preview');
         const previewImg = preview.querySelector('img');
 
-        document.querySelectorAll('.card-item[data-image]').forEach((item) => {{
-            item.addEventListener('mouseenter', (e) => {{
-                const imageUrl = item.dataset.image;
-                if (imageUrl) {{
-                    previewImg.src = imageUrl;
-                    preview.style.display = 'block';
-                }}
-            }});
-
-            item.addEventListener('mousemove', (e) => {{
-                // Position preview to the right of cursor, or left if near edge
-                const padding = 20;
-                let x = e.clientX + padding;
-                let y = e.clientY - 100;
-
-                // Keep preview on screen
-                if (x + 260 > window.innerWidth) {{
-                    x = e.clientX - 260 - padding;
-                }}
-                if (y < 10) {{
-                    y = 10;
-                }}
-                if (y + 360 > window.innerHeight) {{
-                    y = window.innerHeight - 360;
-                }}
-
-                preview.style.left = x + 'px';
-                preview.style.top = y + 'px';
-            }});
-
-            item.addEventListener('mouseleave', () => {{
+        // Delegated so rows added later (the Pack step's card lists) get it too.
+        let previewItem = null;
+        document.addEventListener('mouseover', (e) => {{
+            const item = e.target.closest('[data-image]');
+            if (item === previewItem) return;
+            previewItem = item;
+            if (item && item.dataset.image) {{
+                previewImg.src = item.dataset.image;
+                preview.style.display = 'block';
+            }} else {{
                 preview.style.display = 'none';
-            }});
+            }}
         }});
-    </script>
+
+        document.addEventListener('mousemove', (e) => {{
+            if (!previewItem) return;
+            // Position preview to the right of cursor, or left if near edge
+            const padding = 20;
+            let x = e.clientX + padding;
+            let y = e.clientY - 100;
+
+            // Keep preview on screen
+            if (x + 260 > window.innerWidth) {{
+                x = e.clientX - 260 - padding;
+            }}
+            if (y < 10) {{
+                y = 10;
+            }}
+            if (y + 360 > window.innerHeight) {{
+                y = window.innerHeight - 360;
+            }}
+
+            preview.style.left = x + 'px';
+            preview.style.top = y + 'px';
+        }});
+{fulfillment.FULFILLMENT_JS if is_bulk else ''}    </script>
 </body>
 </html>
 """
@@ -2575,7 +2599,7 @@ def main():
 
     if len(sys.argv) < 2:
         print("Usage: python mtg_packing_slip_organizer.py <slip1.pdf> [slip2.pdf] [slip3.pdf] [-o output.html]")
-        print("       python mtg_packing_slip_organizer.py <pull_sheet.csv> [-o output.html]")
+        print("       python mtg_packing_slip_organizer.py <pull_sheet.csv> [shipping_export.csv] [-o output.html]")
         print("\nThis tool parses TCGplayer packing slips and generates an HTML page")
         print("organized by card color, treatment, and rarity for easier order fulfillment.")
         print("Pass up to 5 PDFs to merge into a single multi-order pull sheet, or a single")
@@ -2609,15 +2633,25 @@ def main():
         output_path = pdf_paths[0].rsplit('.', 1)[0] + '_organized.html'
 
     if any(is_pull_sheet_csv(p) for p in pdf_paths):
-        if len(pdf_paths) > 1:
-            print("Error: Pass a pull sheet CSV on its own, without other files.")
+        if len(pdf_paths) > 2 or not all(is_pull_sheet_csv(p) for p in pdf_paths):
+            print("Error: Pass the pull sheet CSV on its own or with its shipping export CSV.")
             sys.exit(1)
-        cards, orders = parse_pull_sheet(Path(pdf_paths[0]).read_text(encoding="utf-8-sig"))
+        texts = {}
+        for p in pdf_paths:
+            text = Path(p).read_text(encoding="utf-8-sig")
+            texts[fulfillment.csv_kind(text)] = text
+        if "pull_sheet" not in texts:
+            print("Error: One of the CSVs must be the TCGplayer pull sheet.")
+            sys.exit(1)
+        cards, orders = parse_pull_sheet(texts["pull_sheet"])
         if not cards:
             print("No Magic cards found in the pull sheet.")
             sys.exit(1)
+        shipments = None
+        if "shipping_export" in texts:
+            shipments = fulfillment.parse_shipping_export(texts["shipping_export"])
         cards = fetch_colors_from_scryfall(cards)
-        generate_html(cards, output_path, pull_sheet_orders=orders)
+        generate_html(cards, output_path, pull_sheet_orders=orders, shipments=shipments)
         print(f"\nDone! Open {output_path} in your browser.")
         return
 
