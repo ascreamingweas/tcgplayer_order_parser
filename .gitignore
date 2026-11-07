@@ -23,3 +23,9 @@ __pycache__/
 
 # Environment variables
 .env
+
+# TCGplayer CSV exports (shipping exports hold buyer addresses)
+*.csv
+
+# Test cache
+.pytest_cache/

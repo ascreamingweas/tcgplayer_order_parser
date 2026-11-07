@@ -13,6 +13,15 @@
       margin: 0 auto;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
+    #mtg-organizer .mode-toggle {
+      display: flex; justify-content: center; gap: 4px; margin-bottom: 14px;
+    }
+    #mtg-organizer .mode-toggle .mode-btn {
+      display: inline-block; margin: 0; padding: 8px 18px; font-size: 0.9em;
+      background: #eee; color: #555; border-radius: 6px;
+    }
+    #mtg-organizer .mode-toggle .mode-btn:hover { background: #e0dcff; }
+    #mtg-organizer .mode-toggle .mode-btn.active { background: #6c63ff; color: #fff; }
     #mtg-organizer .upload-area {
       border: 2px dashed #999; border-radius: 12px;
       padding: 40px 20px; text-align: center; cursor: pointer;
@@ -98,10 +107,15 @@
     }
   </style>
 
+  <div class="mode-toggle" id="mtgModeToggle">
+    <button type="button" class="mode-btn active" data-mode="pdf">Packing Slips (PDF)</button>
+    <button type="button" class="mode-btn" data-mode="csv">Pull Sheet (CSV)</button>
+  </div>
+
   <div class="upload-area" id="mtgDropZone">
     <input type="file" id="mtgFileInput" accept=".pdf" multiple>
-    <div class="label">Drop packing slip PDFs here or click to browse</div>
-    <div class="sublabel">Upload up to 5 for a multi-order pull sheet</div>
+    <div class="label" id="mtgDropLabel">Drop packing slip PDFs here or click to browse</div>
+    <div class="sublabel" id="mtgDropSublabel">Upload up to 5 for a multi-order pull sheet</div>
     <div class="file-list" id="mtgFileList"></div>
   </div>
 
@@ -132,7 +146,22 @@
   const procText = document.getElementById('mtgProcText');
   const procDetail = document.getElementById('mtgProcDetail');
 
-  const MAX_FILES = 5;
+  // Upload modes: up to 5 packing slip PDFs, or one pull sheet CSV
+  // covering every open order.
+  const MODES = {
+    pdf: {
+      ext: '.pdf', max: 5, kind: 'PDF', multiple: true,
+      label: 'Drop packing slip PDFs here or click to browse',
+      sublabel: 'Upload up to 5 for a multi-order pull sheet',
+    },
+    csv: {
+      ext: '.csv', max: 2, kind: 'CSV', multiple: true,
+      label: 'Drop the TCGplayer pull sheet CSV here, plus the shipping export for labels',
+      sublabel: 'Add the shipping export too to print labels and pack bulk orders. Non-Magic cards are skipped.',
+    },
+  };
+  let mode = 'pdf';
+
   const GROUP_COLORS = ['#4a9eff', '#ff9800', '#66bb6a', '#ab47bc', '#ef5350'];
   const GROUP_LABELS = ['A', 'B', 'C', 'D', 'E'];
   let selectedFiles = [];
@@ -141,15 +170,39 @@
   const fileInput = document.getElementById('mtgFileInput');
   const fileList = document.getElementById('mtgFileList');
 
+  function setMode(newMode) {
+    mode = newMode;
+    const m = MODES[mode];
+    document.querySelectorAll('#mtgModeToggle .mode-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+    fileInput.accept = m.ext;
+    fileInput.multiple = m.multiple;
+    document.getElementById('mtgDropLabel').textContent = m.label;
+    document.getElementById('mtgDropSublabel').textContent = m.sublabel;
+    selectedFiles = [];
+    renderFileList();
+    status.textContent = '';
+    status.className = 'status';
+    submitBtn.disabled = true;
+  }
+  document.querySelectorAll('#mtgModeToggle .mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => setMode(btn.dataset.mode));
+  });
+
   function addFiles(newFiles) {
+    const m = MODES[mode];
+    // CSV mode takes the pull sheet and the shipping export; a file with the same
+    // name replaces the earlier one.
+    if (mode === 'csv') selectedFiles = selectedFiles.filter(f => ![...newFiles].some(n => n.name === f.name));
     for (const file of newFiles) {
-      if (selectedFiles.length >= MAX_FILES) {
-        status.textContent = `Maximum ${MAX_FILES} PDFs allowed.`;
+      if (selectedFiles.length >= m.max) {
+        status.textContent = `Maximum ${m.max} ${m.kind}s allowed.`;
         status.className = 'status error';
         break;
       }
-      if (!file.name.toLowerCase().endsWith('.pdf')) {
-        status.textContent = 'Please select PDF files only.';
+      if (!file.name.toLowerCase().endsWith(m.ext)) {
+        status.textContent = `Please select ${m.kind} files only.`;
         status.className = 'status error';
         continue;
       }
@@ -174,7 +227,7 @@
       return;
     }
     fileList.innerHTML = selectedFiles.map((f, i) => {
-      const showGroup = selectedFiles.length > 1;
+      const showGroup = mode === 'pdf' && selectedFiles.length > 1;
       const groupBadge = showGroup
         ? `<span class="file-group" style="background:${GROUP_COLORS[i]}">${GROUP_LABELS[i]}</span>`
         : '';
@@ -213,7 +266,8 @@
 
     processing.classList.add('active');
     procFill.style.width = '0%';
-    procText.textContent = selectedFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
+    procText.textContent = mode === 'csv' ? 'Uploading pull sheet...'
+      : selectedFiles.length > 1 ? 'Uploading PDFs...' : 'Uploading PDF...';
     procDetail.textContent = '';
 
     const form = new FormData();
@@ -228,7 +282,9 @@
       }
       const uploadData = await uploadRes.json();
       jobId = uploadData.job_id;
-      procText.textContent = `Parsing PDF (${uploadData.card_count} cards)...`;
+      procText.textContent = mode === 'csv'
+        ? `Parsed pull sheet (${uploadData.card_count} cards, ${uploadData.order_count} orders)...`
+        : `Parsing PDF (${uploadData.card_count} cards)...`;
       procDetail.textContent = 'Looking up card data on Scryfall...';
     } catch (e) {
       processing.classList.remove('active');
@@ -256,8 +312,8 @@
         procText.textContent = 'Done!';
         procDetail.textContent = 'Opening pull sheet...';
 
-        const blob = new Blob([d.html], { type: 'text/html' });
-        window.open(URL.createObjectURL(blob), '_blank');
+        // The API serves the finished sheet from a real URL (relative to the API).
+        window.open(API_URL + d.report_url, '_blank');
 
         setTimeout(() => {
           processing.classList.remove('active');
