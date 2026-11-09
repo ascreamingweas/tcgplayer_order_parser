@@ -32,3 +32,8 @@ def test_bonus_sheet_set_type_is_premium():
     assert organizer.treatment_bucket(None, "Outlaws of Thunder Junction", "R", "X", "expansion") == "Regular"
     # Fallback by name when the lookup didn't return a set type.
     assert organizer.treatment_bucket(None, "Outlaws of Thunder Junction: Breaking News", "R", "X") == "Premium"
+
+
+def test_innistrad_double_feature_is_premium():
+    assert organizer.treatment_bucket(None, "Innistrad: Double Feature", "R", "Sigarda's Splendor", "draft_innovation") == "Premium"
+    assert organizer.treatment_bucket(None, "Innistrad: Midnight Hunt", "R", "X", "expansion") == "Regular"

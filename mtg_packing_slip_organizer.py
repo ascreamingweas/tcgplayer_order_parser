@@ -162,7 +162,9 @@ def is_premium_treatment(variant: Optional[str]) -> bool:
 # bonus sheets are picked up automatically); this list is the fallback by set name
 # for when the Scryfall lookup fails. Matched with spacing/punctuation stripped,
 # since PDF set names come out squashed.
-PREMIUM_SETS = ('mysticalarchive', 'retroframeartifacts', 'breakingnews')
+# Innistrad: Double Feature isn't a bonus sheet to Scryfall (it's a whole set, type
+# "draft_innovation"), but every card has its black-and-white frame, so it's listed here.
+PREMIUM_SETS = ('mysticalarchive', 'retroframeartifacts', 'breakingnews', 'innistraddoublefeature')
 BONUS_SHEET_SET_TYPE = "masterpiece"
 
 
