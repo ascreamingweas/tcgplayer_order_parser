@@ -264,7 +264,7 @@ def step_panels() -> str:
             <label class="ff-check"><input type="checkbox" id="ff-hide-packed"> Hide packed</label>
             <button class="nav-btn danger" id="ff-reset-pack">Reset packing</button>
         </div>
-        <p class="ff-hint">Match each card to its label number. Click a card when it's in the envelope; an envelope is packed when all its cards are in. Right-click a card to mark it missing.</p>
+        <p class="ff-hint">Match each card to its label number. Click a card when it's in the envelope, or tick the envelope's box to mark all its cards in at once. Right-click a card to mark it missing.</p>
         <div class="ff-refunds" id="ff-refunds" hidden></div>
         <div class="envelopes" id="ff-envelopes"></div>
     </section>
@@ -346,6 +346,8 @@ FULFILLMENT_CSS = """
         .env-title b { color: #fff; }
         .env-status { font-size: 0.85em; color: #8a93a8; white-space: nowrap; }
         .envelope.packed .env-status { color: #8fdc93; }
+        .env-done { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+        .env-done input { accent-color: #4caf50; width: 18px; height: 18px; cursor: pointer; }
         .env-cards { list-style: none; margin: 6px 0 0; padding: 0; }
         .env-card { display: flex; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; align-items: baseline; }
         .env-card:hover { background: rgba(255,255,255,0.05); }
@@ -750,7 +752,8 @@ FULFILLMENT_JS = r"""
                 return '<div class="envelope' + (p ? ' packed' : '') + '">'
                     + '<div class="env-head"><span class="env-no">#' + labelNo[o.order_number] + '</span>'
                     + '<span class="env-title"><b>' + esc(o.first_name) + ' ' + esc(o.last_name) + '</b> <span class="meta">' + esc(o.short_id) + ' · ' + cardCount(o) + 'x</span></span>'
-                    + '<span class="env-status">' + (p ? '✓ Packed' : inCount + ' / ' + lines.length + ' in') + '</span></div>'
+                    + '<label class="env-status env-done"><input type="checkbox" data-pack-order="' + esc(o.order_number) + '"' + (p ? ' checked' : '')
+                    + ' aria-label="Envelope #' + labelNo[o.order_number] + ' packed"> ' + (p ? 'Packed' : inCount + ' / ' + lines.length + ' in') + '</label></div>'
                     + (miss ? '<div class="env-reasons"><span class="ff-chip bad">' + miss + ' missing: refund the buyer</span></div>' : '')
                     + '<ul class="env-cards">' + lines.map((x) => cardLine(o, x, true)).join('') + '</ul></div>';
             }).join('') || '<p class="ff-empty">' + (bulk.length ? 'Every envelope is packed.' : 'No bulk orders with these settings.') + '</p>';
@@ -771,6 +774,18 @@ FULFILLMENT_JS = r"""
             if (!line) return;
             const key = line.dataset.pack;
             packed[key] ? delete packed[key] : packed[key] = true;
+            save();
+            render();
+        });
+        // The envelope checkbox packs (or unpacks) every card in it at once.
+        document.addEventListener('change', (e) => {
+            const order = e.target.dataset && e.target.dataset.packOrder;
+            if (!order) return;
+            (cardsByOrder[order] || []).forEach((x) => {
+                const key = order + '|' + x.card.index;
+                if (e.target.checked && missingOf(order, x.card.index) < x.qty) packed[key] = true;
+                else delete packed[key];
+            });
             save();
             render();
         });
