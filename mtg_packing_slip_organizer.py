@@ -20,6 +20,7 @@ from html import escape as html_escape
 from typing import Optional
 
 import fulfillment
+import scryfall_db
 from fonts_data import PLANEWALKER_CMC_WOFF2_B64, PLANEWALKER_DINGS_WOFF2_B64
 
 # Try to import pdfplumber, provide helpful error if not available
@@ -773,6 +774,8 @@ def parse_card_line(line: str) -> Optional[Card]:
 
 SCRYFALL_HEADERS = {"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"}
 SCRYFALL_RETRIES = 3
+SCRYFALL_MIN_INTERVAL = 0.1  # Scryfall asks for at most ~10 requests a second
+_last_scryfall_call = 0.0
 
 
 def scryfall_get(url: str, timeout: int = 10) -> dict:
@@ -782,7 +785,12 @@ def scryfall_get(url: str, timeout: int = 10) -> dict:
     backoff; without this a busy moment silently turned cards Colorless. Any other
     HTTP error (e.g. 404 not found) is raised straight away.
     """
+    global _last_scryfall_call
     for attempt in range(SCRYFALL_RETRIES + 1):
+        wait = _last_scryfall_call + SCRYFALL_MIN_INTERVAL - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _last_scryfall_call = time.time()
         try:
             req = urllib.request.Request(url, headers=SCRYFALL_HEADERS)
             with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -810,7 +818,6 @@ def search_scryfall_by_name_and_number(card_name: str, collector_number: str) ->
     name = card_name.split("//")[0].strip().replace('"', "")
     query = urllib.parse.urlencode({"q": f'!"{name}" cn:"{collector_number}"', "unique": "prints"})
     try:
-        time.sleep(0.1)
         results = scryfall_get(f"https://api.scryfall.com/cards/search?{query}").get("data", [])
     except Exception:
         return None
@@ -832,7 +839,6 @@ def search_scryfall_by_set(set_code: str, collector_number: str) -> Optional[dic
     # retry the same printing through search before giving up.
     query = urllib.parse.urlencode({"q": f'set:{set_code} cn:"{collector_number}"', "unique": "prints"})
     try:
-        time.sleep(0.1)
         results = scryfall_get(f"https://api.scryfall.com/cards/search?{query}").get("data", [])
         return results[0] if results else None
     except Exception:
@@ -877,7 +883,31 @@ def get_lookup_set_code(set_name: str, card_name: str) -> Optional[str]:
 
 
 def search_scryfall(card_name: str, set_name: str = None, collector_number: str = None) -> Optional[dict]:
-    """Search Scryfall for a card and return its data.
+    """Find a card's Scryfall data: the local copy first, then the live API.
+
+    The local copy (scryfall_db) answers exact printings by set + collector number,
+    or by name + collector number when the set isn't on Scryfall. Anything it can't
+    pin down goes to the live API, so printings newer than the last download still
+    resolve; a name-only local match is the last resort before giving up.
+    """
+    set_code = get_lookup_set_code(set_name, card_name) if set_name else None
+    if collector_number:
+        local = (scryfall_db.by_set_number(set_code, collector_number)
+                 or scryfall_db.by_set_name(set_code, card_name, collector_number) if set_code
+                 else scryfall_db.by_name_number(card_name, collector_number, set_name))
+    else:
+        local = scryfall_db.by_name(card_name)
+    if local:
+        return local
+
+    live = search_scryfall_live(card_name, set_name, collector_number)
+    if scryfall_db.available():
+        scryfall_db.record_miss(card_name, set_name, collector_number, found_live=live is not None)
+    return live or scryfall_db.by_name(card_name)
+
+
+def search_scryfall_live(card_name: str, set_name: str = None, collector_number: str = None) -> Optional[dict]:
+    """Search the live Scryfall API for a card and return its data.
 
     If set_name and collector_number are provided, tries to look up the exact printing first.
     Falls back to fuzzy name search if exact lookup fails.
@@ -1263,6 +1293,9 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                      for each card processed. Used by the API for streaming progress.
     """
     print("\nFetching card data from Scryfall...")
+    if not scryfall_db.available():
+        print("  (No local Scryfall copy yet; every card is looked up live. "
+              "Run 'make scryfall-refresh' once for much faster lookups.)")
 
     # Cache to avoid duplicate lookups
     # For variants, we cache by set+collector_number to get exact art
@@ -1304,9 +1337,6 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
             status = f"{card.color} (cached)"
             print(f"  [{i+1}/{total}] {card.card_name}: {status}")
         else:
-            # Scryfall rate limit: 10 requests per second
-            time.sleep(0.1)
-
             # Try to get exact printing with set code and collector number
             scryfall_data = search_scryfall(search_name, card.set_name, card.collector_number)
             official_name = None

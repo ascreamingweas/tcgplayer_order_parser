@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 import fulfillment
 import labels
+import scryfall_db
 
 from mtg_packing_slip_organizer import (
     parse_packing_slip,
@@ -496,8 +497,10 @@ def index():
 
 @app.on_event("startup")
 def startup_sync_sets():
-    """Pre-fetch Scryfall set data on startup so the first request is fast."""
+    """Pre-fetch Scryfall set data on startup so the first request is fast, and keep
+    the local copy of Scryfall's card data fresh (downloads it now if missing)."""
     fetch_scryfall_sets()
+    scryfall_db.start_background_refresh()
 
 
 @app.get("/health")
@@ -510,6 +513,13 @@ def health():
 def sets_status():
     """Return set sync status and diagnostics."""
     return get_set_sync_status()
+
+
+@app.get("/api/scryfall")
+def scryfall_status():
+    """Local Scryfall card data: when it was last downloaded, and recent lookups it
+    couldn't answer (found_live says whether the live API could)."""
+    return scryfall_db.status()
 
 
 @app.post("/api/sets/refresh")

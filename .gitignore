@@ -29,3 +29,6 @@ __pycache__/
 
 # Test cache
 .pytest_cache/
+
+# Local copy of Scryfall card data (make scryfall-refresh)
+data/

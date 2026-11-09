@@ -23,7 +23,7 @@ VENV := venv
 PYTHON := $(VENV)/bin/python3
 PIP := $(VENV)/bin/pip
 
-.PHONY: help setup run pullsheet serve test clean list
+.PHONY: help setup run pullsheet serve test scryfall-refresh scryfall-status clean list
 
 help: ## Show this help message
 	@echo "TCGplayer Packing Slip Organizer"
@@ -34,6 +34,8 @@ help: ## Show this help message
 	@echo "  make pullsheet CSV=/path/to/pullsheet.csv - Process a TCGplayer pull sheet CSV"
 	@echo "  make serve                    - Run the web app (pull, labels, and packing) on PORT=$(PORT)"
 	@echo "  make test                     - Run the tests"
+	@echo "  make scryfall-refresh         - Download Scryfall's card data for local lookups (the web app also does this daily)"
+	@echo "  make scryfall-status          - Show the local card data's age and recent lookups it missed"
 	@echo "  make list                     - List generated HTML files in output folder"
 	@echo "  make clean                    - Remove all generated HTML files"
 	@echo ""
@@ -121,6 +123,12 @@ serve: ## Run the web app locally
 
 test: ## Run the tests
 	$(PYTHON) -m pytest -q tests
+
+scryfall-refresh: ## Download Scryfall's card data (FORCE=1 to rebuild even if unchanged)
+	$(PYTHON) scryfall_db.py refresh $(if $(FORCE),--force,)
+
+scryfall-status: ## Show the local Scryfall data and recent misses
+	$(PYTHON) scryfall_db.py status
 
 list: ## List generated HTML files in output folder
 	@echo "Generated HTML files in $(OUTPUT_DIR)/:"

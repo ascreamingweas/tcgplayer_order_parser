@@ -142,6 +142,12 @@ Output files are saved to the `output/` directory.
 - localStorage: `bulk-settings` (label settings, shared across batches), `bulk-<generationId>-printed|packed|missing|excluded|step`
 - Missing cards: `missing["<order>|<cardIndex>"] = copies not found`, set from the right-click menu (`#ff-menu`); label counts and envelope progress subtract them
 
+### Local Scryfall Data
+- `scryfall_db.py` - Downloads Scryfall's "Default Cards" JSONL bulk file and builds `data/scryfall.sqlite` (trimmed card JSON, indexed by set + collector number and by name/front-face name). Rebuilt into a temp file and swapped in; misses carry over
+- `search_scryfall()` tries the local copy first: set + number, then set + name (The List writes "081/281" where Scryfall has "AFR-81"), or name + number with promo-type hints for sets Scryfall doesn't have ("Promo Pack: ..." -> `promopack`, "Buy-A-Box" -> `buyabox`). Otherwise `search_scryfall_live()` and a `misses` row
+- All live calls go through `scryfall_get()` (paced to ~10/s, retries 429/5xx/network errors)
+- The web app runs `start_background_refresh()` at startup (hourly check, rebuild when older than a day)
+
 ## Common Issues & Solutions
 
 ### Set Name Mismatches

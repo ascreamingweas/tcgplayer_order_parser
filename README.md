@@ -17,7 +17,7 @@ Parses TCGplayer packing slip PDFs (or a TCGplayer pull sheet CSV covering all o
 - **Card image preview** - Hover over any card to see the actual card image from Scryfall
 - **Exact variant art** - Shows the correct art for each specific printing (Extended Art, Showcase, etc.)
 - **Interactive HTML** - Click cards to mark them as pulled; progress persists in your browser
-- **Scryfall integration** - Automatically syncs set list and looks up card data via the Scryfall API
+- **Scryfall integration** - Automatically syncs set list and looks up card data from a local copy of Scryfall's card data, falling back to the live Scryfall API (see below)
 - **Double-faced card support** - Transform and modal cards are classified by their front face
 
 ## Bulk fulfillment (pull sheet + shipping export)
@@ -35,6 +35,15 @@ Choose **Pull Sheet (CSV)** and drop both CSVs from TCGplayer: the pull sheet an
 An order is **bulk** when it paid at most $5.00 shipping, is worth under $50, holds only Magic singles, ships within the US, and is in both files. Orders with sealed Magic (pull sheet rows with no card number or rarity) or another game are set aside, but their Magic singles are still on the pull sheet. Both dollar limits are settings on the Labels step. Orders with more than 15 cards (also a setting) stay bulk but get flagged.
 
 Labels are built by the web app (`/api/labels.pdf`), so run `make serve` (or use the deployed site). A report made with `make pullsheet CSV=... SHIP=...` has every step, but printing labels from it needs the web app. Settings carry over between batches; printed and packed marks are kept per batch in your browser.
+
+## Local Scryfall data
+
+Card lookups use a local copy of Scryfall's daily "Default Cards" download (every English printing, ~80 MB download, ~70 MB on disk in `data/scryfall.sqlite`). A pull sheet of a few hundred cards looks up in about a second instead of a couple of minutes, without Scryfall rate limits.
+
+- The web app downloads it on startup if it's missing and checks for a new copy daily. For the command line, run `make scryfall-refresh` once (and whenever you like after).
+- Anything the local copy can't answer (a card printed or previewed since the last download, or a set Scryfall doesn't have) is looked up live as before, and recorded.
+- `make scryfall-status` (or `GET /api/scryfall` on the web app) shows when the copy was downloaded and the recent cards it had to look up live.
+- Set `SCRYFALL_DB=/path/to/file.sqlite` to keep it somewhere else, e.g. a persistent disk on the deployed server.
 
 ## Installation
 
