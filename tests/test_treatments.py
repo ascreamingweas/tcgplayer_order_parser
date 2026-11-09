@@ -24,3 +24,11 @@ def test_special_rarity_is_premium_but_not_tokens():
     assert organizer.treatment_bucket(None, "Time Spiral: Remastered", "S", "Talrand, Sky Summoner") == "Premium"
     assert organizer.treatment_bucket(None, "Time Spiral: Remastered", "R", "Extirpate") == "Regular"
     assert organizer.treatment_bucket(None, "Time Spiral: Remastered", "S", "Ape Token") == "Regular"
+
+
+def test_bonus_sheet_set_type_is_premium():
+    # Any Scryfall "masterpiece" (bonus sheet) printing, even from a set not listed by name.
+    assert organizer.treatment_bucket(None, "Some Future Set: Bonus Sheet", "R", "X", "masterpiece") == "Premium"
+    assert organizer.treatment_bucket(None, "Outlaws of Thunder Junction", "R", "X", "expansion") == "Regular"
+    # Fallback by name when the lookup didn't return a set type.
+    assert organizer.treatment_bucket(None, "Outlaws of Thunder Junction: Breaking News", "R", "X") == "Premium"

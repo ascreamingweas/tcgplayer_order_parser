@@ -102,3 +102,9 @@ def test_name_number_prefers_the_promo_kind_in_the_set_name(tmp_path, monkeypatc
     assert pick("Prerelease Cards") == "108s"
     assert pick("Some Unknown Set") == "108"
     assert scryfall_db.by_name_number("Jadar", "999") is None
+
+
+def test_old_schema_copy_needs_refresh(db):
+    assert not scryfall_db.needs_refresh()
+    scryfall_db._set_meta("schema_version", "1")
+    assert scryfall_db.needs_refresh()

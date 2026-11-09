@@ -12,7 +12,7 @@ Parses TCGplayer packing slip PDFs (or a TCGplayer pull sheet CSV covering all o
 - **Color-organized output** - Cards grouped by color (WUBRG order), then Multicolor, Colorless, and Lands
 - **Rarity sorting** - Within each color, cards sorted by rarity (Mythic → Rare → Uncommon → Common)
 - **Variants first** - Within each rarity, special printings (Borderless, Showcase, Extended Art, Retro Frame, etc.) appear before traditional border cards
-- **Premium Treatments** - Borderless, Showcase, Extended Art, Retro Frame, White Border, Full Art, Alternate Art, every card in Strixhaven: Mystical Archive and The Brothers' War: Retro Frame Artifacts, and Special-rarity cards (e.g. Time Spiral Remastered's timeshifted cards) are grouped under Premium Treatments in each color
+- **Premium Treatments** - Borderless, Showcase, Extended Art, Retro Frame, White Border, Full Art, Alternate Art, every bonus-sheet card (Scryfall's "masterpiece" sets: Mystical Archive, Retro Frame Artifacts, Breaking News, Enchanting Tales, Multiverse Legends, Special Guests, and any new ones), and Special-rarity cards (e.g. Time Spiral Remastered's timeshifted cards) are grouped under Premium Treatments in each color
 - **Preserves fulfillment details** - Card name, variant, foil status, set, collector number, condition, and price
 - **Language detection** - Non-English cards (Japanese, German, French, Italian, etc.) are flagged with a visible badge
 - **Card image preview** - Hover over any card to see the actual card image from Scryfall

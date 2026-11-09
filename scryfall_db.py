@@ -28,8 +28,10 @@ REFRESH_EVERY = 24 * 60 * 60  # Scryfall regenerates the file about every 12 hou
 
 # Card fields the organizer reads (color, mana value, type, rarity, image, name,
 # exact printing). Everything else in the bulk file is dropped to keep the DB small.
-CARD_FIELDS = ("name", "set", "set_name", "collector_number", "colors", "cmc", "type_line", "rarity",
+CARD_FIELDS = ("name", "set", "set_name", "set_type", "collector_number", "colors", "cmc", "type_line", "rarity",
                "layout", "promo_types", "frame_effects", "released_at", "lang", "digital")
+# Bump when CARD_FIELDS changes, so existing copies are rebuilt with the new fields.
+SCHEMA_VERSION = "2"
 FACE_FIELDS = ("name", "type_line", "colors")
 
 _lock = threading.Lock()
@@ -123,6 +125,7 @@ def build(jsonl_gz: Path, updated_at: str, path: Path = None) -> int:
     _index(conn)
     conn.executemany("INSERT OR REPLACE INTO meta VALUES (?, ?)", [
         ("updated_at", updated_at), ("built_at", datetime.now(timezone.utc).isoformat()), ("card_count", str(count)),
+        ("schema_version", SCHEMA_VERSION),
     ])
     if path.exists():
         conn.execute("ATTACH DATABASE ? AS old", (str(path),))
@@ -154,7 +157,7 @@ def _meta(key: str) -> Optional[str]:
 
 def needs_refresh() -> bool:
     built = _meta("built_at")
-    if not built:
+    if not built or _meta("schema_version") != SCHEMA_VERSION:
         return True
     age = datetime.now(timezone.utc) - datetime.fromisoformat(built)
     return age.total_seconds() > REFRESH_EVERY
@@ -173,7 +176,7 @@ def refresh(force: bool = False, log=print) -> bool:
         with urllib.request.urlopen(req, timeout=30) as response:
             info = json.loads(response.read().decode())
         updated_at = info["updated_at"]
-        if not force and _meta("updated_at") == updated_at:
+        if not force and _meta("updated_at") == updated_at and _meta("schema_version") == SCHEMA_VERSION:
             # Same file as last time; just note that we checked.
             _set_meta("built_at", datetime.now(timezone.utc).isoformat())
             log(f"Scryfall data already current ({updated_at})")

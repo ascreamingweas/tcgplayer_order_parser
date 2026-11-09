@@ -50,6 +50,7 @@ class Card:
     order_group: Optional[str] = None  # 'A'-'E' for multi-order pulls
     cmc: Optional[float] = None  # Converted mana cost, from Scryfall
     type_line: Optional[str] = None  # Scryfall type line, e.g. "Creature — Elf"
+    set_type: Optional[str] = None  # Scryfall set type of the printing; "masterpiece" = bonus sheet
     orders: Optional[dict[str, int]] = None  # Pull-sheet mode: order number -> qty of this card
 
 
@@ -155,11 +156,14 @@ def is_premium_treatment(variant: Optional[str]) -> bool:
     return any(keyword in lower for keyword in PREMIUM_TREATMENTS)
 
 
-# Sets where every card has a special frame even though the listing names no
-# treatment (e.g. "Dark Ritual" in Strixhaven: Mystical Archive, or "Defense Grid" in
-# The Brothers' War: Retro Frame Artifacts). Matched on the set name with
-# spacing/punctuation stripped, since PDF set names come out squashed.
-PREMIUM_SETS = ('mysticalarchive', 'retroframeartifacts')
+# Bonus sheets: sets where every card has a special frame even though the listing
+# names no treatment (e.g. "Dark Ritual" in Strixhaven: Mystical Archive). Scryfall
+# marks these with set type "masterpiece", which is what normally decides it (so new
+# bonus sheets are picked up automatically); this list is the fallback by set name
+# for when the Scryfall lookup fails. Matched with spacing/punctuation stripped,
+# since PDF set names come out squashed.
+PREMIUM_SETS = ('mysticalarchive', 'retroframeartifacts', 'breakingnews')
+BONUS_SHEET_SET_TYPE = "masterpiece"
 
 
 def is_premium_set(set_name: Optional[str]) -> bool:
@@ -168,15 +172,18 @@ def is_premium_set(set_name: Optional[str]) -> bool:
 
 
 def treatment_bucket(variant: Optional[str], set_name: Optional[str] = None,
-                     rarity: Optional[str] = None, card_name: str = "") -> str:
+                     rarity: Optional[str] = None, card_name: str = "",
+                     set_type: Optional[str] = None) -> str:
     """Return the treatment grouping label: 'Premium' or 'Regular'.
 
-    Special-rarity cards (Scryfall "special"/"bonus", e.g. Time Spiral Remastered's
-    retro-frame timeshifted cards) are Premium too; tokens are skipped since an
+    Bonus-sheet printings (Scryfall set type "masterpiece") and Special-rarity cards
+    (Scryfall "special"/"bonus", e.g. Time Spiral Remastered's retro-frame
+    timeshifted cards) are Premium too; tokens are skipped for Special since an
     unrecognised slip rarity also starts out as Special.
     """
     special = rarity == "S" and not is_token_name(card_name)
-    return 'Premium' if is_premium_treatment(variant) or is_premium_set(set_name) or special else 'Regular'
+    bonus_sheet = set_type == BONUS_SHEET_SET_TYPE or is_premium_set(set_name)
+    return 'Premium' if is_premium_treatment(variant) or bonus_sheet or special else 'Regular'
 
 
 # Treatment bucket display order and labels (premium listed first).
@@ -1313,6 +1320,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     name_cache = {}   # (set_name, collector_number, kind) -> authoritative card name
     meta_cache = {}   # (card_name, kind) -> (cmc, type_line); same across printings
     rarity_cache = {} # (set_name, collector_number, kind) -> rarity code; per printing
+    set_type_cache = {}  # (set_name, collector_number, kind) -> Scryfall set type; per printing
 
     # Track failed lookups for summary
     failed_lookups = []
@@ -1342,6 +1350,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 card.cmc, card.type_line = meta_cache[color_cache_key]
             if image_cache_key in rarity_cache:
                 card.rarity = rarity_cache[image_cache_key]
+            card.set_type = set_type_cache.get(image_cache_key)
             status = f"{card.color} (cached)"
             print(f"  [{i+1}/{total}] {card.card_name}: {status}")
         else:
@@ -1353,6 +1362,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 card.image_url = get_card_image_url(scryfall_data)
                 card.cmc = scryfall_data.get("cmc")
                 card.type_line = scryfall_data.get("type_line")
+                card.set_type = scryfall_data.get("set_type")
                 # Prefer Scryfall's authoritative rarity over the slip's parsed
                 # value, which can reflect the product (e.g. "P" for Promo Pack)
                 # rather than the card's real rarity. Charms in Promo Packs, for
@@ -1398,6 +1408,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
             name_cache[image_cache_key] = card.card_name
             meta_cache[color_cache_key] = (card.cmc, card.type_line)
             rarity_cache[image_cache_key] = card.rarity
+            set_type_cache[image_cache_key] = card.set_type
 
         if on_progress:
             on_progress(i + 1, total, card.card_name, status)
@@ -1511,7 +1522,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     organized = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
     for card in cards:
-        organized[card.color][treatment_bucket(card.variant, card.set_name, card.rarity, card.card_name)][card.rarity].append(card)
+        organized[card.color][treatment_bucket(card.variant, card.set_name, card.rarity, card.card_name, card.set_type)][card.rarity].append(card)
 
     # Sort colors
     sorted_colors = sorted(organized.keys(), key=lambda c: COLOR_ORDER.get(c, 99))
