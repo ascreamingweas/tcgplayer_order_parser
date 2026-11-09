@@ -139,10 +139,10 @@ def get_variant_style(variant: Optional[str]) -> tuple[str, str, str]:
 # any foil finish. A card is premium if it carries any of these frame/art
 # treatments — even alongside a fancy foil (e.g. "Textured Foil / Extended Art"
 # is premium). Foil-only finishes (Surge, Galaxy, Confetti, etc.), Foil Etched,
-# White Border, Promo, and plain cards all fall under "Regular".
+# Promo, and plain cards all fall under "Regular".
 PREMIUM_TREATMENTS = (
     'borderless', 'extended art', 'showcase', 'retro frame', 'full art', 'future sight',
-    'alternate art',
+    'alternate art', 'white border',
 )
 
 
