@@ -113,7 +113,8 @@ VARIANT_STYLES = {
     'white border': ('variant-white-border', 'White Border', '#b0bec5'),
     'foil etched': ('variant-etched', 'Foil Etched', '#b8860b'),
     'full art': ('variant-full-art', 'Full Art', '#3f51b5'),
-    'future sight': ('variant-future-sight', 'Future Sight', '#00e5ff'),
+    # Styled like Retro Frame: both are pulled from the same spot.
+    'future sight': ('variant-retro', 'Future Sight', '#ff8f00'),
     'surge foil': ('variant-surge', 'Surge Foil', '#ff6f00'),
     'neon ink': ('variant-neon-ink', 'Neon Ink', '#76ff03'),
     'confetti foil': ('variant-confetti', 'Confetti Foil', '#e040fb'),
@@ -1837,7 +1838,6 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         .variant-white-border {{ background: rgba(176,190,197,0.2); color: #b0bec5; }}
         .variant-etched {{ background: rgba(184,134,11,0.2); color: #daa520; }}
         .variant-full-art {{ background: rgba(63,81,181,0.2); color: #7986cb; }}
-        .variant-future-sight {{ background: rgba(0,229,255,0.2); color: #00e5ff; }}
         .variant-surge {{ background: rgba(255,111,0,0.2); color: #ff9800; }}
         .variant-neon-ink {{ background: rgba(118,255,3,0.2); color: #76ff03; }}
         .variant-confetti {{ background: rgba(224,64,251,0.2); color: #e040fb; }}

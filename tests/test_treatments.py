@@ -37,3 +37,8 @@ def test_bonus_sheet_set_type_is_premium():
 def test_innistrad_double_feature_is_premium():
     assert organizer.treatment_bucket(None, "Innistrad: Double Feature", "R", "Sigarda's Splendor", "draft_innovation") == "Premium"
     assert organizer.treatment_bucket(None, "Innistrad: Midnight Hunt", "R", "X", "expansion") == "Regular"
+
+
+def test_future_sight_chip_matches_retro_frame():
+    assert organizer.get_variant_style("Future Sight")[0] == organizer.get_variant_style("Retro Frame")[0]
+    assert organizer.get_variant_style("Future Sight")[1] == "Future Sight"
