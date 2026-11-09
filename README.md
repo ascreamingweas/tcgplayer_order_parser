@@ -30,6 +30,8 @@ Choose **Pull Sheet (CSV)** and drop both CSVs from TCGplayer: the pull sheet an
 4. **Pack** - one box per label number with the cards that go in that envelope. Click a card once it's in; the envelope shows packed when every card is in.
 5. **Set aside** - orders to fulfill another way, with the reason and their Magic cards.
 
+**Missing cards:** right-click a card on the Pull step (or a card in an envelope on Pack / Set aside) to say how many copies you couldn't find, per order. The card gets a red "missing" badge, its envelope shows only what's left to pack, and the Pack step lists **Refunds to send** with each buyer, order number, and missing cards ("Copy details" copies them for your message to the buyer). An order with every card missing is set aside. Labels count only the cards that ship, so mark missing cards before printing labels when you can.
+
 An order is **bulk** when it paid at most $5.00 shipping, is worth under $50, holds only Magic singles, ships within the US, and is in both files. Orders with sealed Magic (pull sheet rows with no card number or rarity) or another game are set aside, but their Magic singles are still on the pull sheet. Both dollar limits are settings on the Labels step. Orders with more than 15 cards (also a setting) stay bulk but get flagged.
 
 Labels are built by the web app (`/api/labels.pdf`), so run `make serve` (or use the deployed site). A report made with `make pullsheet CSV=... SHIP=...` has every step, but printing labels from it needs the web app. Settings carry over between batches; printed and packed marks are kept per batch in your browser.

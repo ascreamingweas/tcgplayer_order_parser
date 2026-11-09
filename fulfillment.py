@@ -170,6 +170,8 @@ def steps_nav(order_count: int) -> str:
 def step_panels() -> str:
     """Labels, Pack, and Set aside steps. Their content is filled in by FULFILLMENT_JS."""
     return """
+    <div class="ff-menu" id="ff-menu" role="menu" hidden></div>
+
     <section class="step-panel" id="step-labels" hidden>
         <div class="labels-layout">
             <aside class="ff-card ff-settings">
@@ -262,7 +264,8 @@ def step_panels() -> str:
             <label class="ff-check"><input type="checkbox" id="ff-hide-packed"> Hide packed</label>
             <button class="nav-btn danger" id="ff-reset-pack">Reset packing</button>
         </div>
-        <p class="ff-hint">Match each card to its label number. Click a card when it's in the envelope; an envelope is packed when all its cards are in.</p>
+        <p class="ff-hint">Match each card to its label number. Click a card when it's in the envelope; an envelope is packed when all its cards are in. Right-click a card to mark it missing.</p>
+        <div class="ff-refunds" id="ff-refunds" hidden></div>
         <div class="envelopes" id="ff-envelopes"></div>
     </section>
 
@@ -351,6 +354,37 @@ FULFILLMENT_CSS = """
         .env-card .meta { color: #8a93a8; font-size: 0.85em; }
         .env-card.static { cursor: default; }
         .env-other { color: #f0b35a; font-size: 0.9em; margin-top: 6px; }
+        .env-card.gone { opacity: 0.55; }
+        .env-card.gone .qty, .env-card.gone > span:nth-child(2) > :first-child { text-decoration: line-through; }
+        .missing-note { color: #ff7b7b; font-size: 0.85em; font-weight: 600; margin-left: 6px; text-decoration: none; }
+        .ff-chip.bad { color: #ff9b9b; background: rgba(239,83,80,0.18); }
+
+        .card-item.has-missing { box-shadow: inset 4px 0 0 #ef5350; }
+        .missing-badge { display: inline-block; margin-left: 8px; font-size: 0.75em; font-weight: 700; color: #fff;
+            background: #c62828; border-radius: 999px; padding: 1px 8px; vertical-align: middle; }
+
+        .ff-menu { position: fixed; z-index: 2000; min-width: 260px; max-width: 340px; background: #0f1830; color: #eee;
+            border: 1px solid #3a4a75; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); padding: 10px 12px; font-size: 0.92em; }
+        .ff-menu[hidden] { display: none; }
+        .ff-menu h3 { margin: 0 0 2px; font-size: 1em; color: #fff; }
+        .ff-menu .meta { color: #8a93a8; font-size: 0.85em; }
+        .ff-menu-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid #26314f; }
+        .ff-menu .ff-menu-q { margin-bottom: 6px; }
+        .ff-menu-row .who { flex: 1; min-width: 0; }
+        .ff-menu-row button { font: inherit; width: 28px; height: 28px; border-radius: 6px; border: 1px solid #3a4a75;
+            background: #16213e; color: #eee; cursor: pointer; }
+        .ff-menu-row button:disabled { opacity: 0.35; cursor: default; }
+        .ff-menu-row .count { min-width: 5.5em; text-align: center; font-variant-numeric: tabular-nums; }
+        .ff-menu-row .count.some { color: #ff7b7b; font-weight: 700; }
+        .ff-menu-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+        .ff-refunds { background: rgba(198,40,40,0.12); border: 1px solid #7a2a2a; border-radius: 12px; padding: 12px 14px; margin-top: 14px; }
+        .ff-refunds[hidden] { display: none; }
+        .ff-refunds h3 { margin: 0 0 8px; font-size: 1em; color: #ffb4b4; }
+        .refund { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.08); }
+        .refund:first-of-type { border-top: 0; }
+        .refund .who b { color: #fff; }
+        .refund ul { margin: 2px 0 0; padding-left: 18px; color: #ddd; }
         .env-reasons { margin-top: 2px; }
 """
 
@@ -371,6 +405,7 @@ FULFILLMENT_JS = r"""
         settings.custom = { ...DEFAULTS.custom, ...(settings.custom || {}) };
         let printed = load(KEY + 'printed', {});
         let packed = load(KEY + 'packed', {});      // "order|cardIndex" -> true
+        let missing = load(KEY + 'missing', {});    // "order|cardIndex" -> copies not found
         let excluded = new Set(load(KEY + 'excluded', []));
         let previewUrl = null, previewTimer = null, previewSeq = 0;
 
@@ -381,12 +416,16 @@ FULFILLMENT_JS = r"""
             localStorage.setItem('bulk-settings', JSON.stringify(settings));
             localStorage.setItem(KEY + 'printed', JSON.stringify(printed));
             localStorage.setItem(KEY + 'packed', JSON.stringify(packed));
+            localStorage.setItem(KEY + 'missing', JSON.stringify(missing));
             localStorage.setItem(KEY + 'excluded', JSON.stringify([...excluded]));
         };
 
         const cardsByOrder = {};
         DATA.cards.forEach((c) => Object.entries(c.orders).forEach(([o, q]) => (cardsByOrder[o] ||= []).push({ card: c, qty: q })));
-        const cardCount = (o) => o.item_count || (cardsByOrder[o.order_number] || []).reduce((n, x) => n + x.qty, 0);
+        const missingOf = (order, index) => missing[order + '|' + index] || 0;
+        const missingTotal = (o) => (cardsByOrder[o.order_number] || []).reduce((n, x) => n + missingOf(o.order_number, x.card.index), 0);
+        // What actually ships: the order's items less any cards that couldn't be found.
+        const cardCount = (o) => (o.item_count || (cardsByOrder[o.order_number] || []).reduce((n, x) => n + x.qty, 0)) - missingTotal(o);
 
         // ---- Which orders are bulk ------------------------------------------------
         function reasons(o) {
@@ -400,6 +439,7 @@ FULFILLMENT_JS = r"""
                 if (line !== 'Magic') r.push('Has ' + (line === 'Magic Sealed' ? 'sealed Magic' : line) + ' ×' + qty);
             });
             if (o.has_shipping && (o.country || 'US').toUpperCase() !== 'US') r.push('Ships to ' + o.country);
+            if (o.in_pull_sheet && o.magic_cards > 0 && cardCount(o) <= 0) r.push('Every card missing: refund it');
             return r;
         }
         let bulk = [], aside = [], labelNo = {};
@@ -414,6 +454,7 @@ FULFILLMENT_JS = r"""
         const flags = (o) => {
             const f = [];
             if (cardCount(o) > settings.big_order) f.push(cardCount(o) + ' cards');
+            if (missingTotal(o)) f.push(missingTotal(o) + ' missing');
             return f;
         };
         const selected = () => bulk.filter((o) => !excluded.has(o.order_number) && !(settings.hide_printed && printed[o.order_number]));
@@ -441,6 +482,97 @@ FULFILLMENT_JS = r"""
                 chip.title = no ? 'Label #' + no + ' · ' + o : 'Set aside: ' + (a ? a.reasons.join(', ') : '') + ' · ' + o;
             });
         }
+
+        function decorateMissing() {
+            document.querySelectorAll('.card-item[data-index]').forEach((item) => {
+                const card = DATA.cards[+item.dataset.index];
+                if (!card) return;
+                const n = Object.keys(card.orders).reduce((sum, o) => sum + missingOf(o, card.index), 0);
+                item.classList.toggle('has-missing', n > 0);
+                let badge = item.querySelector('.missing-badge');
+                if (n > 0 && !badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'missing-badge';
+                    item.querySelector('.card-name').appendChild(badge);
+                }
+                if (badge) n > 0 ? badge.textContent = n + ' missing' : badge.remove();
+            });
+        }
+
+        // ---- Missing cards: right-click a card (Pull, Pack, or Set aside) ----------
+        const menu = $('ff-menu');
+        let menuCard = null, menuOrders = [];
+        function openMenu(card, orders, x, y) {
+            menuCard = card;
+            menuOrders = orders;
+            renderMenu();
+            menu.hidden = false;
+            const w = menu.offsetWidth, h = menu.offsetHeight;
+            menu.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';
+            menu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + 'px';
+        }
+        function closeMenu() { menu.hidden = true; menuCard = null; }
+        function orderName(o) {
+            const rec = DATA.orders.find((r) => r.order_number === o) || {};
+            const no = labelNo[o];
+            return (no ? '#' + no + ' · ' : 'Set aside · ') + esc(rec.short_id || o)
+                + (rec.first_name ? ' <span class="meta">' + esc(rec.first_name + ' ' + rec.last_name) + '</span>' : '');
+        }
+        function renderMenu() {
+            const c = menuCard;
+            menu.innerHTML = '<h3>' + esc(c.name) + '</h3><div class="meta">' + esc(c.set_name + ' #' + c.number + ' · ' + c.condition + (c.foil ? ' Foil' : ''))
+                + '</div><div class="meta ff-menu-q">How many copies couldn\'t you find?</div>'
+                + menuOrders.map((o) => {
+                    const qty = c.orders[o], m = missingOf(o, c.index);
+                    return '<div class="ff-menu-row"><span class="who">' + orderName(o) + '</span>'
+                        + '<button data-miss="' + esc(o) + '" data-step="-1"' + (m <= 0 ? ' disabled' : '') + ' aria-label="One fewer missing">−</button>'
+                        + '<span class="count' + (m ? ' some' : '') + '">' + m + ' of ' + qty + ' missing</span>'
+                        + '<button data-miss="' + esc(o) + '" data-step="1"' + (m >= qty ? ' disabled' : '') + ' aria-label="One more missing">+</button></div>';
+                }).join('')
+                + '<div class="ff-menu-actions"><button class="nav-btn" data-miss-all="1">All missing</button>'
+                + '<button class="nav-btn" data-miss-all="0">None missing</button><button class="nav-btn primary" data-miss-close>Done</button></div>';
+        }
+        function setMissing(o, index, n) {
+            const key = o + '|' + index;
+            if (n > 0) missing[key] = n; else delete missing[key];
+            save();
+            render();
+            if (menuCard) renderMenu();
+        }
+        menu.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const b = e.target.closest('button');
+            if (!b || !menuCard) return;
+            if (b.dataset.miss) {
+                const o = b.dataset.miss;
+                const n = Math.max(0, Math.min(menuCard.orders[o], missingOf(o, menuCard.index) + Number(b.dataset.step)));
+                setMissing(o, menuCard.index, n);
+            } else if (b.dataset.missAll) {
+                const all = b.dataset.missAll === '1';
+                menuOrders.forEach((o) => { const key = o + '|' + menuCard.index; if (all) missing[key] = menuCard.orders[o]; else delete missing[key]; });
+                save();
+                render();
+                renderMenu();
+            } else if ('missClose' in b.dataset) {
+                closeMenu();
+            }
+        });
+        document.addEventListener('contextmenu', (e) => {
+            const row = e.target.closest('.card-item[data-index]');
+            const line = e.target.closest('[data-card-line]');
+            if (!row && !line) return;
+            e.preventDefault();
+            if (row) {
+                const card = DATA.cards[+row.dataset.index];
+                if (card) openMenu(card, Object.keys(card.orders), e.clientX, e.clientY);
+            } else {
+                const [o, idx] = line.dataset.cardLine.split('|');
+                openMenu(DATA.cards[+idx], [o], e.clientX, e.clientY);
+            }
+        });
+        document.addEventListener('click', (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); }, true);
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+        window.addEventListener('scroll', () => { if (!menu.hidden) closeMenu(); }, { passive: true });
 
         // ---- Labels step --------------------------------------------------------------
         const fields = ['layout', 'margin', 'id_line', 'uppercase', 'cut_lines', 'return_address',
@@ -562,15 +694,49 @@ FULFILLMENT_JS = r"""
         function cardLine(o, x, clickable) {
             const c = x.card;
             const key = o.order_number + '|' + c.index;
+            const m = missingOf(o.order_number, c.index);
+            const gone = m >= x.qty;
             const bits = [c.set_name + ' #' + c.number, c.condition + (c.foil ? ' Foil' : '')];
-            return '<li class="env-card' + (clickable ? (packed[key] ? ' in' : '') : ' static') + '"'
+            const note = m ? '<span class="missing-note">' + (gone ? 'missing: refund' : m + ' of ' + x.qty + ' missing') + '</span>' : '';
+            clickable = clickable && !gone;
+            return '<li class="env-card' + (gone ? ' gone static' : clickable ? (packed[key] ? ' in' : '') : ' static') + '"'
+                + ' data-card-line="' + esc(key) + '"'
                 + (clickable ? ' data-pack="' + esc(key) + '"' : '') + (c.image ? ' data-image="' + esc(c.image) + '"' : '') + '>'
-                + '<span class="qty">' + x.qty + 'x</span><span>' + esc(c.name) + (c.variant ? ' <span class="meta">(' + esc(c.variant) + ')</span>' : '')
+                + '<span class="qty">' + (gone ? x.qty : x.qty - m) + 'x</span><span><span>' + esc(c.name) + '</span>' + (c.variant ? ' <span class="meta">(' + esc(c.variant) + ')</span>' : '') + note
                 + '<div class="meta">' + esc(bits.join(' · ')) + '</div></span></li>';
         }
+        // Fully missing lines don't hold an envelope back; partly missing ones still need packing.
+        const lineDone = (o, x) => missingOf(o.order_number, x.card.index) >= x.qty || packed[o.order_number + '|' + x.card.index];
         function isPacked(o) {
             const lines = cardsByOrder[o.order_number] || [];
-            return lines.length > 0 && lines.every((x) => packed[o.order_number + '|' + x.card.index]);
+            return lines.length > 0 && lines.every((x) => lineDone(o, x));
+        }
+
+        function refundText(o, lines) {
+            const who = o.has_shipping ? o.first_name + ' ' + o.last_name : 'Buyer';
+            return 'Order ' + o.order_number + ' (' + who + '): missing\n'
+                + lines.map((x) => '- ' + missingOf(o.order_number, x.card.index) + 'x ' + x.card.name
+                    + (x.card.variant ? ' (' + x.card.variant + ')' : '') + ', ' + x.card.set_name + ' #' + x.card.number
+                    + ', ' + x.card.condition + (x.card.foil ? ' Foil' : '')).join('\n');
+        }
+        function renderRefunds() {
+            const refunds = DATA.orders.map((o) => ({ o, lines: (cardsByOrder[o.order_number] || []).filter((x) => missingOf(o.order_number, x.card.index)) }))
+                .filter((r) => r.lines.length);
+            const box = $('ff-refunds');
+            box.hidden = refunds.length === 0;
+            box.innerHTML = '<h3>Refunds to send (' + refunds.length + ' order' + (refunds.length === 1 ? '' : 's') + ')</h3>'
+                + refunds.map(({ o, lines }) => '<div class="refund"><div class="who">'
+                    + (labelNo[o.order_number] ? '<b>#' + labelNo[o.order_number] + '</b> · ' : '<span class="meta">Set aside</span> · ')
+                    + '<b>' + esc(o.has_shipping ? o.first_name + ' ' + o.last_name : o.short_id) + '</b> <span class="meta">' + esc(o.order_number) + '</span>'
+                    + '<ul>' + lines.map((x) => '<li>' + missingOf(o.order_number, x.card.index) + 'x ' + esc(x.card.name)
+                        + (x.card.variant ? ' (' + esc(x.card.variant) + ')' : '') + ' <span class="meta">' + esc(x.card.set_name + ' #' + x.card.number + ' · ' + x.card.condition + (x.card.foil ? ' Foil' : '')) + '</span></li>').join('') + '</ul></div>'
+                    + '<div><button class="nav-btn" data-copy-refund="' + esc(o.order_number) + '">Copy details</button></div></div>').join('');
+            box.querySelectorAll('[data-copy-refund]').forEach((b) => b.addEventListener('click', async () => {
+                const r = refunds.find((x) => x.o.order_number === b.dataset.copyRefund);
+                try { await navigator.clipboard.writeText(refundText(r.o, r.lines)); b.textContent = 'Copied'; }
+                catch (err) { b.textContent = 'Copy failed'; }
+                setTimeout(() => { b.textContent = 'Copy details'; }, 1500);
+            }));
         }
         function renderPack() {
             const done = bulk.filter(isPacked).length;
@@ -578,12 +744,14 @@ FULFILLMENT_JS = r"""
             const hide = $('ff-hide-packed').checked;
             $('ff-envelopes').innerHTML = bulk.filter((o) => !(hide && isPacked(o))).map((o) => {
                 const lines = cardsByOrder[o.order_number] || [];
-                const inCount = lines.filter((x) => packed[o.order_number + '|' + x.card.index]).length;
+                const inCount = lines.filter((x) => lineDone(o, x)).length;
+                const miss = missingTotal(o);
                 const p = isPacked(o);
                 return '<div class="envelope' + (p ? ' packed' : '') + '">'
                     + '<div class="env-head"><span class="env-no">#' + labelNo[o.order_number] + '</span>'
                     + '<span class="env-title"><b>' + esc(o.first_name) + ' ' + esc(o.last_name) + '</b> <span class="meta">' + esc(o.short_id) + ' · ' + cardCount(o) + 'x</span></span>'
                     + '<span class="env-status">' + (p ? '✓ Packed' : inCount + ' / ' + lines.length + ' in') + '</span></div>'
+                    + (miss ? '<div class="env-reasons"><span class="ff-chip bad">' + miss + ' missing: refund the buyer</span></div>' : '')
                     + '<ul class="env-cards">' + lines.map((x) => cardLine(o, x, true)).join('') + '</ul></div>';
             }).join('') || '<p class="ff-empty">' + (bulk.length ? 'Every envelope is packed.' : 'No bulk orders with these settings.') + '</p>';
 
@@ -617,8 +785,10 @@ FULFILLMENT_JS = r"""
         function render() {
             classify();
             decorateChips();
+            decorateMissing();
             renderLabels();
             renderPack();
+            renderRefunds();
             $('labels-count').textContent = '(' + bulk.length + ')';
             $('pack-count').textContent = '(' + bulk.filter(isPacked).length + '/' + bulk.length + ')';
             $('aside-count').textContent = '(' + aside.length + ')';
