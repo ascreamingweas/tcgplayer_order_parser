@@ -105,3 +105,13 @@ def test_labels_pdf_prints_label_numbers():
     text = pdf.pages[0].extract_text()
     assert "ADA LOVELACE" in text and "#1 · 111111 · 3x" in text
     assert client.post("/api/labels.pdf", json={"shipments": [], "settings": {}}).status_code == 400
+
+
+def test_orders_sort_oldest_first_then_export_order():
+    _, summaries = organizer.parse_pull_sheet(PULL)
+    shipments = fulfillment.parse_shipping_export(SHIPPING)
+    shipments[0].order_date = "2026-11-06"   # 111111 is the newest
+    shipments[2].order_date = "2026-11-04"   # 333333 the oldest
+    shipments.reverse()                      # same-day orders follow the export's order
+    records = fulfillment.build_orders(summaries, shipments)
+    assert [r["short_id"] for r in records] == ["333333", "444444", "222222", "111111"]

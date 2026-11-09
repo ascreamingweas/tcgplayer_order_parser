@@ -96,11 +96,14 @@ def parse_shipping_export(text: str) -> list[Shipment]:
 
 
 def build_orders(pull_sheet_orders: list[dict], shipments: list[Shipment]) -> list[dict]:
-    """One record per order in either file, in the pull sheet's order.
+    """One record per order in either file, oldest order first.
 
-    Orders only in the shipping export (nothing to pull) come last.
+    This order is what numbers the bulk labels (#1 is the oldest bulk order). The
+    export only has the day, so same-day orders keep the shipping export's order;
+    orders with no shipping row (no date) come last.
     """
     by_number = {s.order_number: s for s in shipments}
+    position = {s.order_number: i for i, s in enumerate(shipments)}
     records = []
     seen = set()
     for o in pull_sheet_orders:
@@ -109,6 +112,10 @@ def build_orders(pull_sheet_orders: list[dict], shipments: list[Shipment]) -> li
     for s in shipments:
         if s.order_number not in seen:
             records.append(_order_record(None, s))
+    records.sort(key=lambda r: (
+        not r.get("order_date"), r.get("order_date") or "",
+        position.get(r["order_number"], len(position)), r["order_number"],
+    ))
     return records
 
 
@@ -409,6 +416,9 @@ FULFILLMENT_JS = r"""
         let packed = load(KEY + 'packed', {});      // "order|cardIndex" -> true
         let missing = load(KEY + 'missing', {});    // "order|cardIndex" -> copies not found
         let excluded = new Set(load(KEY + 'excluded', []));
+        // Label numbers are frozen once labels are printed, so changing a setting
+        // afterwards can't renumber envelopes away from their printed labels.
+        let locked = load(KEY + 'numbers', null);   // order -> label number
         let previewUrl = null, previewTimer = null, previewSeq = 0;
 
         const $ = (id) => document.getElementById(id);
@@ -420,6 +430,7 @@ FULFILLMENT_JS = r"""
             localStorage.setItem(KEY + 'packed', JSON.stringify(packed));
             localStorage.setItem(KEY + 'missing', JSON.stringify(missing));
             localStorage.setItem(KEY + 'excluded', JSON.stringify([...excluded]));
+            localStorage.setItem(KEY + 'numbers', JSON.stringify(locked));
         };
 
         const cardsByOrder = {};
@@ -450,8 +461,16 @@ FULFILLMENT_JS = r"""
             DATA.orders.forEach((o) => {
                 const r = reasons(o);
                 if (r.length) aside.push({ ...o, reasons: r });
-                else { bulk.push(o); labelNo[o.order_number] = bulk.length; }
+                else bulk.push(o);
             });
+            if (!locked) {
+                bulk.forEach((o, i) => labelNo[o.order_number] = i + 1);
+                return;
+            }
+            // Locked: printed numbers stay put; orders that became bulk since go after them.
+            let next = Math.max(0, ...Object.values(locked));
+            bulk.forEach((o) => labelNo[o.order_number] = locked[o.order_number] || ++next);
+            bulk.sort((a, b) => labelNo[a.order_number] - labelNo[b.order_number]);
         }
         const flags = (o) => {
             const f = [];
@@ -647,12 +666,14 @@ FULFILLMENT_JS = r"""
         $('ff-select-none').addEventListener('click', () => { excluded = new Set(bulk.map((o) => o.order_number)); save(); render(); });
         $('ff-mark-printed').addEventListener('click', () => {
             selected().forEach((o) => printed[o.order_number] = new Date().toISOString());
+            locked = { ...(locked || {}), ...labelNo };
             save();
             render();
         });
         $('ff-clear-printed').addEventListener('click', () => {
-            if (!confirm('Clear the printed mark from every order in this batch?')) return;
+            if (!confirm('Clear the printed mark from every order in this batch? Label numbers will be worked out again.')) return;
             printed = {};
+            locked = null;
             save();
             render();
         });
@@ -807,8 +828,9 @@ FULFILLMENT_JS = r"""
             $('labels-count').textContent = '(' + bulk.length + ')';
             $('pack-count').textContent = '(' + bulk.filter(isPacked).length + '/' + bulk.length + ')';
             $('aside-count').textContent = '(' + aside.length + ')';
-            $('bulk-banner').textContent = DATA.orders.length + ' orders: ' + bulk.length + ' bulk (labels ' + (bulk.length ? '#1–#' + bulk.length : 'none')
-                + '), ' + aside.length + ' set aside';
+            const top = bulk.length ? labelNo[bulk[bulk.length - 1].order_number] : 0;
+            $('bulk-banner').textContent = DATA.orders.length + ' orders: ' + bulk.length + ' bulk (labels ' + (bulk.length ? '#1–#' + top : 'none')
+                + ', oldest first' + (locked ? ', numbers locked since printing' : '') + '), ' + aside.length + ' set aside';
         }
 
         syncInputs();

@@ -27,7 +27,7 @@ Choose **Pull Sheet (CSV)** and drop both CSVs from TCGplayer: the pull sheet an
 
 1. **Upload** - back to the start for a new batch.
 2. **Pull** - the usual color/rarity pull sheet with every Magic single from every order. Each order chip shows its label number (`#4 F1175B ×1`); orders outside the bulk process have a dashed orange chip, and hovering it says why.
-3. **Labels** - address labels for the bulk orders, numbered #1, #2, ... Pick a layout (4, 2, 6 or 1 per Rollo 4x6 sheet, address-label rolls, or a custom size), the matching line (`#4 · F1175B · 2x` by default; the count never says "cards"), capitals, cut lines, and an optional return address. The preview is the PDF you print. Mark labels printed so the next pass can hide them.
+3. **Labels** - address labels for the bulk orders, numbered #1, #2, ... oldest order first (same-day orders keep the shipping export's order). Once you mark labels printed the numbers are locked, so changing a setting later can't renumber envelopes away from their printed labels; clearing the printed marks unlocks them. Pick a layout (4, 2, 6 or 1 per Rollo 4x6 sheet, address-label rolls, or a custom size), the matching line (`#4 · F1175B · 2x` by default; the count never says "cards"), capitals, cut lines, and an optional return address. The preview is the PDF you print. Mark labels printed so the next pass can hide them.
 4. **Pack** - one box per label number with the cards that go in that envelope. Click a card once it's in, or tick the envelope's checkbox to mark the whole order packed at once (untick to undo).
 5. **Set aside** - orders to fulfill another way, with the reason and their Magic cards.
 
