@@ -290,10 +290,7 @@ def fetch_scryfall_sets() -> dict:
     print("Syncing set list from Scryfall...")
 
     try:
-        url = "https://api.scryfall.com/sets"
-        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as response:
-            data = json.loads(response.read().decode())
+        data = scryfall_get("https://api.scryfall.com/sets", timeout=30)
 
         mapping = {}
         prefixes = set()
@@ -774,16 +771,59 @@ def parse_card_line(line: str) -> Optional[Card]:
     )
 
 
+SCRYFALL_HEADERS = {"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"}
+SCRYFALL_RETRIES = 3
+
+
+def scryfall_get(url: str, timeout: int = 10) -> dict:
+    """GET a Scryfall URL and return its JSON, retrying when Scryfall is busy.
+
+    A 429 (rate limited), a 5xx, or a network error is retried with a short
+    backoff; without this a busy moment silently turned cards Colorless. Any other
+    HTTP error (e.g. 404 not found) is raised straight away.
+    """
+    for attempt in range(SCRYFALL_RETRIES + 1):
+        try:
+            req = urllib.request.Request(url, headers=SCRYFALL_HEADERS)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as e:
+            if attempt == SCRYFALL_RETRIES or not (e.code == 429 or e.code >= 500):
+                raise
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            delay = float(retry_after) if retry_after and retry_after.isdigit() else 0.5 * 2 ** attempt
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == SCRYFALL_RETRIES:
+                raise
+            delay = 0.5 * 2 ** attempt
+        time.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
+def search_scryfall_by_name_and_number(card_name: str, collector_number: str) -> Optional[dict]:
+    """Find a printing by exact card name and collector number, in any set.
+
+    For TCGplayer catch-all sets with no Scryfall equivalent, such as "Buy-A-Box
+    Promos": Scryfall files those cards in their main set ("Firebending Student"
+    Buy-a-Box #393 is Avatar: The Last Airbender #393).
+    """
+    name = card_name.split("//")[0].strip().replace('"', "")
+    query = urllib.parse.urlencode({"q": f'!"{name}" cn:"{collector_number}"', "unique": "prints"})
+    try:
+        time.sleep(0.1)
+        results = scryfall_get(f"https://api.scryfall.com/cards/search?{query}").get("data", [])
+    except Exception:
+        return None
+    return results[0] if results else None
+
+
 def search_scryfall_by_set(set_code: str, collector_number: str) -> Optional[dict]:
     """Look up a specific card printing by set code and collector number."""
     # Scryfall endpoint for exact set/number lookup
     url = f"https://api.scryfall.com/cards/{set_code}/{collector_number}"
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode())
-            return data
+        return scryfall_get(url)
     except Exception:
         pass
 
@@ -793,10 +833,8 @@ def search_scryfall_by_set(set_code: str, collector_number: str) -> Optional[dic
     query = urllib.parse.urlencode({"q": f'set:{set_code} cn:"{collector_number}"', "unique": "prints"})
     try:
         time.sleep(0.1)
-        req = urllib.request.Request(f"https://api.scryfall.com/cards/search?{query}", headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            results = json.loads(response.read().decode()).get("data", [])
-            return results[0] if results else None
+        results = scryfall_get(f"https://api.scryfall.com/cards/search?{query}").get("data", [])
+        return results[0] if results else None
     except Exception:
         return None
 
@@ -853,6 +891,12 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
             result = search_scryfall_by_set(set_code, collector_number)
             if result:
                 return result
+        else:
+            # Set unknown to Scryfall: the name plus collector number still pins
+            # down the exact printing (and its art) in most cases.
+            result = search_scryfall_by_name_and_number(card_name, collector_number)
+            if result:
+                return result
 
     # Fall back to fuzzy name search
     search_name = card_name.strip()
@@ -867,21 +911,15 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
     url = f"{base_url}?{urllib.parse.urlencode(params)}"
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode())
-            return data
+        return scryfall_get(url)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             # Try exact search
             params = {"exact": search_name}
             url = f"{base_url}?{urllib.parse.urlencode(params)}"
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    data = json.loads(response.read().decode())
-                    return data
-            except:
+                return scryfall_get(url)
+            except Exception:
                 pass
 
             # Try with simpler name (remove commas and extra words)
@@ -890,12 +928,11 @@ def search_scryfall(card_name: str, set_name: str = None, collector_number: str 
                 params = {"fuzzy": simple_name}
                 url = f"{base_url}?{urllib.parse.urlencode(params)}"
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "MTG-Packing-Slip-Organizer/1.0", "Accept": "application/json"})
-                    with urllib.request.urlopen(req, timeout=10) as response:
-                        data = json.loads(response.read().decode())
-                        return data
-                except:
+                    return scryfall_get(url)
+                except Exception:
                     pass
+        else:
+            print(f"  Error searching for '{search_name}': {e}")
         return None
     except Exception as e:
         print(f"  Error searching for '{search_name}': {e}")
