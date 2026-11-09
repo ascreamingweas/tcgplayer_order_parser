@@ -13,3 +13,14 @@ def test_white_border_from_pull_sheet_lands_in_premium():
     cards, _ = organizer.parse_pull_sheet(pull)
     assert cards[0].variant == "White Border"
     assert organizer.treatment_bucket(cards[0].variant, cards[0].set_name) == "Premium"
+
+
+def test_retro_frame_artifacts_set_is_premium():
+    assert organizer.treatment_bucket(None, "The Brothers' War: Retro Frame Artifacts") == "Premium"
+    assert organizer.treatment_bucket(None, "The Brothers' War") == "Regular"
+
+
+def test_special_rarity_is_premium_but_not_tokens():
+    assert organizer.treatment_bucket(None, "Time Spiral: Remastered", "S", "Talrand, Sky Summoner") == "Premium"
+    assert organizer.treatment_bucket(None, "Time Spiral: Remastered", "R", "Extirpate") == "Regular"
+    assert organizer.treatment_bucket(None, "Time Spiral: Remastered", "S", "Ape Token") == "Regular"

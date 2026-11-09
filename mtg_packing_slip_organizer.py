@@ -156,9 +156,10 @@ def is_premium_treatment(variant: Optional[str]) -> bool:
 
 
 # Sets where every card has a special frame even though the listing names no
-# treatment (e.g. "Dark Ritual" in Strixhaven: Mystical Archive). Matched on the set
-# name with spacing/punctuation stripped, since PDF set names come out squashed.
-PREMIUM_SETS = ('mysticalarchive',)
+# treatment (e.g. "Dark Ritual" in Strixhaven: Mystical Archive, or "Defense Grid" in
+# The Brothers' War: Retro Frame Artifacts). Matched on the set name with
+# spacing/punctuation stripped, since PDF set names come out squashed.
+PREMIUM_SETS = ('mysticalarchive', 'retroframeartifacts')
 
 
 def is_premium_set(set_name: Optional[str]) -> bool:
@@ -166,9 +167,16 @@ def is_premium_set(set_name: Optional[str]) -> bool:
     return any(key in normalized for key in PREMIUM_SETS)
 
 
-def treatment_bucket(variant: Optional[str], set_name: Optional[str] = None) -> str:
-    """Return the treatment grouping label: 'Premium' or 'Regular'."""
-    return 'Premium' if is_premium_treatment(variant) or is_premium_set(set_name) else 'Regular'
+def treatment_bucket(variant: Optional[str], set_name: Optional[str] = None,
+                     rarity: Optional[str] = None, card_name: str = "") -> str:
+    """Return the treatment grouping label: 'Premium' or 'Regular'.
+
+    Special-rarity cards (Scryfall "special"/"bonus", e.g. Time Spiral Remastered's
+    retro-frame timeshifted cards) are Premium too; tokens are skipped since an
+    unrecognised slip rarity also starts out as Special.
+    """
+    special = rarity == "S" and not is_token_name(card_name)
+    return 'Premium' if is_premium_treatment(variant) or is_premium_set(set_name) or special else 'Regular'
 
 
 # Treatment bucket display order and labels (premium listed first).
@@ -1503,7 +1511,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     organized = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
     for card in cards:
-        organized[card.color][treatment_bucket(card.variant, card.set_name)][card.rarity].append(card)
+        organized[card.color][treatment_bucket(card.variant, card.set_name, card.rarity, card.card_name)][card.rarity].append(card)
 
     # Sort colors
     sorted_colors = sorted(organized.keys(), key=lambda c: COLOR_ORDER.get(c, 99))
