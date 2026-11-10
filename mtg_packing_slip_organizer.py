@@ -2205,11 +2205,41 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
                 display: none;
             }}
         }}
+        .jump-buttons {{
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            z-index: 1500;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }}
+        .jump-buttons[hidden] {{ display: none; }}
+        .jump-btn {{
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: 1px solid #3a4a75;
+            background: rgba(22, 33, 62, 0.92);
+            color: #eee;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+        }}
+        .jump-btn:hover {{ background: #e94560; border-color: #e94560; }}
+        .jump-btn:disabled {{ opacity: 0.35; cursor: default; background: rgba(22, 33, 62, 0.92); border-color: #3a4a75; }}
+        @media print {{ .jump-buttons {{ display: none !important; }} }}
 {fulfillment.FULFILLMENT_CSS if is_bulk else ''}    </style>
 </head>
 <body>
     <!-- Card image hover preview -->
     <div id="card-preview"><img src="" alt="Card Preview"></div>
+
+    <!-- Floating jump buttons for long sheets; shown only when the page scrolls -->
+    <div class="jump-buttons" id="jump-buttons" hidden>
+        <button type="button" class="jump-btn" data-jump="top" title="Jump to top" aria-label="Jump to top">▲</button>
+        <button type="button" class="jump-btn" data-jump="bottom" title="Jump to bottom" aria-label="Jump to bottom">▼</button>
+    </div>
 
     <h1><span class="title-flourish">ó</span>MTG Order - Pull Sheet<span class="title-flourish">ô</span></h1>
     <div class="order-info">{html_escape(header_label)}</div>
@@ -2663,6 +2693,27 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         // Card image hover preview
         const preview = document.getElementById('card-preview');
         const previewImg = preview.querySelector('img');
+
+        // Floating jump-to-top/bottom buttons. Shown only when the page is long enough to
+        // scroll (it changes as steps switch and sections collapse); each end's button is
+        // disabled when you're already there.
+        const jumpButtons = document.getElementById('jump-buttons');
+        function updateJumpButtons() {{
+            const max = document.documentElement.scrollHeight - window.innerHeight;
+            jumpButtons.hidden = max < 200;
+            jumpButtons.querySelector('[data-jump="top"]').disabled = window.scrollY < 10;
+            jumpButtons.querySelector('[data-jump="bottom"]').disabled = window.scrollY > max - 10;
+        }}
+        jumpButtons.addEventListener('click', (e) => {{
+            const btn = e.target.closest('[data-jump]');
+            if (!btn) return;
+            const top = btn.dataset.jump === 'top' ? 0 : document.documentElement.scrollHeight;
+            window.scrollTo({{ top, behavior: 'smooth' }});
+        }});
+        window.addEventListener('scroll', updateJumpButtons, {{ passive: true }});
+        window.addEventListener('resize', updateJumpButtons);
+        new ResizeObserver(updateJumpButtons).observe(document.body);
+        updateJumpButtons();
 
         // Delegated so rows added later (the Pack step's card lists) get it too.
         let previewItem = null;
