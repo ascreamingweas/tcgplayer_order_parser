@@ -7,7 +7,7 @@ Parses TCGplayer packing slip PDFs (or a TCGplayer pull sheet CSV covering all o
 - **Pull sheet CSV support** - Drop TCGplayer's pull sheet export (every open order in one file) instead of individual packing slips. Non-Magic cards (Lorcana, Gundam, etc.) are skipped from the sheet but still counted per order
 - **Orders panel** - For pull sheets, a table of every order with its short ID, which TCGs it contains, and card counts; click an order to show only its cards (quantities adjust for cards shared between orders)
 - **Order ID chips** - Each card row in a pull sheet shows which orders it goes to and how many each, e.g. `0710DC ×1`
-- **Bulk fulfillment** - Upload the pull sheet together with TCGplayer's shipping export and the report becomes a set of steps (see below)
+- **Order fulfillment** - Upload the pull sheet together with TCGplayer's shipping export to pull, label, and pack every order, Magic or not (see below)
 
 - **Color-organized output** - Cards grouped by color (WUBRG order), then Multicolor, Colorless, and Lands
 - **Rarity sorting** - Within each color, cards sorted by rarity (Mythic → Rare → Uncommon → Common)
@@ -21,21 +21,25 @@ Parses TCGplayer packing slip PDFs (or a TCGplayer pull sheet CSV covering all o
 - **Scryfall integration** - Automatically syncs set list and looks up card data from a local copy of Scryfall's card data, falling back to the live Scryfall API (see below)
 - **Double-faced card support** - Transform and modal cards are classified by their front face
 
-## Bulk fulfillment (pull sheet + shipping export)
+## Order fulfillment (pull sheet + shipping export)
 
-Choose **Pull Sheet (CSV)** and drop both CSVs from TCGplayer: the pull sheet and the shipping export for the same orders (either order). The report then has steps:
+Choose **Pull Sheet (CSV)** and drop both CSVs from TCGplayer: the pull sheet and the shipping export for the same orders (either order). The report covers **every order** in the batch, in two lanes:
+
+- **Bulk** - cheap shipping (at most $5.00), worth under $50, only Magic singles, shipping in the US, and in both files. These go in stamped envelopes with address labels from this app.
+- **Other** - everything else, each with the reason it isn't bulk (paid for tracking, worth $50+, has Lorcana / Gundam / sealed product, ships abroad, missing from a file).
+
+Every order gets a number, bulk first and then other, each oldest first (same-day orders keep the shipping export's order). The steps:
 
 1. **Upload** - back to the start for a new batch.
-2. **Pull** - the usual color/rarity pull sheet with every Magic single from every order. Each order chip shows its label number (`#4 F1175B ×1`); orders outside the bulk process have a dashed orange chip, and hovering it says why.
-3. **Labels** - address labels for the bulk orders, numbered #1, #2, ... oldest order first (same-day orders keep the shipping export's order). Once you mark labels printed the numbers are locked, so changing a setting later can't renumber envelopes away from their printed labels; clearing the printed marks unlocks them. Pick a layout (4, 2, 6 or 1 per Rollo 4x6 sheet, address-label rolls, or a custom size), the matching line (`#4 · F1175B · 2x` by default; the count never says "cards"), capitals, cut lines, and an optional return address. The preview is the PDF you print. Mark labels printed so the next pass can hide them.
-4. **Pack** - one box per label number with the cards that go in that envelope. Click a card once it's in, or tick the envelope's checkbox to mark the whole order packed at once (untick to undo). Each envelope shows the order's value (from the shipping export), and each card shows its treatment/foil badges and an approximate price per copy (TCGplayer market price from Scryfall's daily data, not what the buyer paid). Cards at or above the top-load price (default $5, set on the Pack step) are highlighted, and the envelope says how many need a toploader.
-5. **Set aside** - orders to fulfill another way, with the reason and their Magic cards.
+2. **Pull** - the color/rarity pull sheet with every Magic single from every order (each order chip shows its number; dashed orange chips are Other orders), then **Other products**: other games and sealed product by game and set. Click a row once it's pulled.
+3. **Labels** - every order in the chosen lane (All / Bulk / Other). Orders that don't need tracking get address labels: pick a layout (4, 2, 6 or 1 per Rollo 4x6 sheet, address-label rolls, or a custom size), the matching line (`#4 · F1175B · 2x` by default; the count never says "cards"), capitals, cut lines, and an optional return address. The preview is the PDF you print. Orders that need tracking (paid over $5 shipping, worth $50+, or already tracked) get a **Tracked label printed elsewhere** checkbox instead. Once you mark labels printed, the numbers are locked, so changing a setting later can't renumber envelopes away from their printed labels; clearing the printed marks unlocks them.
+4. **Pack** - one box per order with every item that goes in it. Click an item once it's in, or tick the envelope's checkbox to mark the whole order packed at once (untick to undo). Each envelope shows its lane, "Needs tracking" when it does, and the order's value; Magic cards show their treatment/foil badges and an approximate price per copy (TCGplayer market price from Scryfall's daily data, not what the buyer paid). Cards at or above the top-load price (default $5, set on the Pack step) are highlighted.
 
-**Missing cards:** right-click a card on the Pull step (or a card in an envelope on Pack / Set aside) to say how many copies you couldn't find, per order. The card gets a red "missing" badge, its envelope shows only what's left to pack, and the Pack step lists **Refunds to send** with each buyer, order number, and missing cards ("Copy details" copies them for your message to the buyer). An order with every card missing is set aside. Labels count only the cards that ship, so mark missing cards before printing labels when you can.
+The All / Bulk / Other buttons under the steps filter Labels and Pack.
 
-An order is **bulk** when it paid at most $5.00 shipping, is worth under $50, holds only Magic singles, ships within the US, and is in both files. Orders with sealed Magic (pull sheet rows with no card number or rarity) or another game are set aside, but their Magic singles are still on the pull sheet. Both dollar limits are settings on the Labels step. Orders with more than 15 cards (also a setting) stay bulk but get flagged.
+**Missing items:** right-click any item on the Pull step (Magic card or other product) or in an envelope to say how many copies you couldn't find, per order. The item gets a red "missing" badge, its envelope shows only what's left to pack, and the Pack step lists **Refunds to send** with each buyer, order number, and missing items ("Copy details" copies them for your message to the buyer). An order with nothing left to ship gets no address label. Labels count only the items that ship, so mark missing items before printing labels when you can.
 
-Labels are built by the web app (`/api/labels.pdf`), so run `make serve` (or use the deployed site). A report made with `make pullsheet CSV=... SHIP=...` has every step, but printing labels from it needs the web app. Settings carry over between batches; printed and packed marks are kept per batch in your browser.
+Labels are built by the web app (`/api/labels.pdf`), so run `make serve` (or use the deployed site). A report made with `make pullsheet CSV=... SHIP=...` has every step, but printing labels from it needs the web app. Settings carry over between batches; printed, packed, pulled, and missing marks are kept per batch in your browser.
 
 ## Local Scryfall data
 

@@ -72,7 +72,7 @@ def _run_job(files):
 
 def test_report_with_shipping_export_has_bulk_steps_and_data():
     html = _run_job([("ship.csv", SHIPPING), ("pull.csv", PULL)])
-    for marker in ['id="steps"', 'id="step-pull"', 'id="step-labels"', 'id="step-pack"', 'id="step-aside"']:
+    for marker in ['id="steps"', 'id="step-pull"', 'id="step-labels"', 'id="step-pack"', 'id="lane-filter"', 'id="ff-other-pull"']:
         assert marker in html
     data = json.loads(re.search(r'<script type="application/json" id="fulfillment-data">(.*?)</script>', html, re.S).group(1))
     assert len(data["orders"]) == 4
@@ -115,3 +115,17 @@ def test_orders_sort_oldest_first_then_export_order():
     shipments.reverse()                      # same-day orders follow the export's order
     records = fulfillment.build_orders(summaries, shipments)
     assert [r["short_id"] for r in records] == ["333333", "444444", "222222", "111111"]
+
+
+def test_other_products_keep_non_magic_and_sealed_rows():
+    products = fulfillment.parse_other_products(PULL)
+    assert [(p["product_line"], p["name"], p["orders"]) for p in products] == [
+        ("Lorcana TCG", "Lore Card", {"AAAA0000-222222-0000B": 1}),
+        ("Magic Sealed", "Test Set Play Booster", {"AAAA0000-444444-0000D": 1}),
+    ]
+
+
+def test_report_embeds_other_products():
+    html = _run_job([("ship.csv", SHIPPING), ("pull.csv", PULL)])
+    data = json.loads(re.search(r'<script type="application/json" id="fulfillment-data">(.*?)</script>', html, re.S).group(1))
+    assert [p["name"] for p in data["products"]] == ["Lore Card", "Test Set Play Booster"]

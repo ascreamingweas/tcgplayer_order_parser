@@ -1,5 +1,5 @@
 """
-FastAPI web app for the MTG Packing Slip Organizer.
+FastAPI web app for TCGplayer Order Fulfillment (formerly the MTG Packing Slip Organizer).
 Accepts PDF uploads and returns organized HTML pull sheets.
 """
 
@@ -31,7 +31,7 @@ from mtg_packing_slip_organizer import (
     parse_pull_sheet,
 )
 
-app = FastAPI(title="MTG Packing Slip Organizer")
+app = FastAPI(title="TCGplayer Order Fulfillment")
 
 # Allow cross-origin requests from any WordPress site.
 # You can restrict this to your specific domain once deployed, e.g.:
@@ -72,7 +72,7 @@ def index():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>MTG Packing Slip Organizer</title>
+        <title>TCGplayer Order Fulfillment</title>
         <style>
             * { box-sizing: border-box; }
             body {
@@ -196,8 +196,8 @@ def index():
         </style>
     </head>
     <body>
-        <h1>MTG Packing Slip Organizer</h1>
-        <p class="sub">Upload TCGplayer packing slip PDFs or a pull sheet CSV to generate an organized pull sheet</p>
+        <h1>TCGplayer Order Fulfillment</h1>
+        <p class="sub">Upload your TCGplayer pull sheet and shipping export to pull, label, and pack every order (or packing slip PDFs for a Magic pull sheet)</p>
 
         <div class="mode-toggle" id="modeToggle">
             <button type="button" class="mode-btn active" data-mode="pdf">Packing Slips (PDF)</button>
@@ -566,6 +566,7 @@ def _start_job(job: dict) -> str:
                 order_names=job["order_names"],
                 pull_sheet_orders=job["pull_sheet_orders"],
                 shipments=job.get("shipments"),
+                other_products=job.get("other_products"),
             )
             job["result_html"] = html
             job["status"] = "complete"
@@ -622,6 +623,7 @@ async def _parse_pull_sheet_upload(files: list[UploadFile]) -> dict:
         "order_names": None,
         "pull_sheet_orders": orders,
         "shipments": shipments,
+        "other_products": fulfillment.parse_other_products(text),
     })
     return {"job_id": job_id, "card_count": len(cards), "order_count": len(orders)}
 

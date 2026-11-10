@@ -134,10 +134,11 @@ Output files are saved to the `output/` directory.
 - No prices or buyer names in the export, so pull sheets hide prices and show an order count
 - `generate_html(..., pull_sheet_orders=...)` renders order ID chips per row and a clickable orders panel
 
-### Bulk Fulfillment
+### Order Fulfillment (Bulk + Other lanes)
 - `fulfillment.py` - Parses the shipping export (`parse_shipping_export`), tells CSVs apart by header (`csv_kind`), joins orders across both files (`build_orders`), and holds the Labels / Pack / Set aside step markup, CSS, and JS
 - `generate_html(..., shipments=...)` (pull-sheet mode only) wraps the pull sheet in a `step-pull` panel and embeds `<script id="fulfillment-data">` with orders, cards (by `data-index`), and label layouts
-- Which orders are bulk is decided in the report's JS so its limits (shipping $5, value $50) can change live; sealed Magic is counted under the `Magic Sealed` line by `parse_pull_sheet`
+- Which lane an order is in (Bulk / Other) is decided in the report's JS so its limits (shipping $5, value $50) can change live; sealed Magic is the `Magic Sealed` line (`fulfillment.product_line_of`)
+- `fulfillment.parse_other_products` keeps the pull sheet rows that aren't Magic singles (other games, sealed); the report shows them under Other products on the Pull step and in each order's envelope. Item ids: Magic cards use their row index, products `p<index>`
 - `labels.py` - Label layouts (`PRESETS`) and the reportlab PDF renderer behind `POST /api/labels.pdf`
 - localStorage: `bulk-settings` (label settings, shared across batches), `bulk-<generationId>-printed|packed|missing|excluded|step`
 - Missing cards: `missing["<order>|<cardIndex>"] = copies not found`, set from the right-click menu (`#ff-menu`); label counts and envelope progress subtract them

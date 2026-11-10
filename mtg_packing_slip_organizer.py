@@ -1143,7 +1143,6 @@ def parse_packing_slip(pdf_path: str) -> list[Card]:
 # open orders; "Order Quantity" splits the row's quantity by order, e.g.
 # "2769C87D-293079-FAB45:1 | 2769C87D-7B2DE7-1616A:1". The last row lists every order.
 PULL_SHEET_MAGIC_LINE = "Magic"
-PULL_SHEET_MAGIC_SEALED_LINE = "Magic Sealed"
 PULL_SHEET_FOOTER = "Orders Contained in Pull Sheet:"
 PULL_SHEET_CONDITIONS = (
     "Near Mint", "Lightly Played", "Moderately Played", "Heavily Played", "Damaged",
@@ -1213,11 +1212,8 @@ def parse_pull_sheet(text: str) -> tuple[list[Card], list[dict]]:
         if not product_line:
             continue
 
-        # Sealed Magic (boosters, decks) has no collector number or rarity; it's
-        # counted under its own line so the order shows it isn't singles-only.
-        if (product_line == PULL_SHEET_MAGIC_LINE and not (row.get("Number") or "").strip()
-                and not (row.get("Rarity") or "").strip()):
-            product_line = PULL_SHEET_MAGIC_SEALED_LINE
+        # Sealed Magic is counted under its own line so the order shows it isn't singles-only.
+        product_line = fulfillment.product_line_of(row)
 
         orders = parse_order_quantities(row.get("Order Quantity") or "")
         for order_number, qty in orders.items():
@@ -1513,7 +1509,7 @@ def render_orders_panel(pull_sheet_orders: list[dict], cards: list[Card]) -> str
 def generate_html(cards: list[Card], output_path: str = None, order_number: str = "",
                    order_numbers: dict[str, str] = None, buyer_name: str = "",
                    order_names: dict[str, str] = None, pull_sheet_orders: list[dict] = None,
-                   shipments: list = None):
+                   shipments: list = None, other_products: list[dict] = None):
     """Generate an HTML page organized by color, treatment, and rarity.
 
     pull_sheet_orders (from parse_pull_sheet) switches to pull-sheet mode: rows carry
@@ -1521,7 +1517,9 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
     since the pull sheet export doesn't include them.
 
     shipments (from fulfillment.parse_shipping_export, pull-sheet mode only) adds the
-    bulk fulfillment steps: Labels, Pack, and Set aside.
+    bulk fulfillment steps: Labels, Pack, and Set aside. other_products (from
+    fulfillment.parse_other_products) are the non-Magic-singles rows of the same pull
+    sheet, so orders holding them can be pulled and packed too.
     """
     import hashlib
 
@@ -1576,7 +1574,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MTG Order - Organized by Color, Treatment & Rarity</title>
+    <title>{"TCGplayer Order Fulfillment" if is_bulk else "MTG Order - Organized by Color, Treatment & Rarity"}</title>
     <style>
         /* Planewalker (free Beleren-style face by Pixel Sagas), subset to digits,
            embedded so the CMC numeral renders the same everywhere. */
@@ -2241,7 +2239,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         <button type="button" class="jump-btn" data-jump="bottom" title="Jump to bottom" aria-label="Jump to bottom">▼</button>
     </div>
 
-    <h1><span class="title-flourish">ó</span>MTG Order - Pull Sheet<span class="title-flourish">ô</span></h1>
+    <h1><span class="title-flourish">ó</span>{"TCGplayer Order Fulfillment" if is_bulk else "MTG Order - Pull Sheet"}<span class="title-flourish">ô</span></h1>
     <div class="order-info">{html_escape(header_label)}</div>
 {fulfillment.steps_nav(len(pull_sheet_orders)) + '    <section class="step-panel" id="step-pull">' if is_bulk else ''}
 
@@ -2450,9 +2448,10 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
 
     if is_bulk:
         orders_data = fulfillment.build_orders(pull_sheet_orders, shipments)
-        html += "    </section>\n" + fulfillment.step_panels()
+        html += fulfillment.OTHER_PULL_HTML + "    </section>\n" + fulfillment.step_panels()
         html += ('    <script type="application/json" id="fulfillment-data">'
-                 + fulfillment.report_data(orders_data, fulfillment.card_records(cards_in_page_order, variant_badges, market_price))
+                 + fulfillment.report_data(orders_data, fulfillment.card_records(cards_in_page_order, variant_badges, market_price),
+                                             other_products or [])
                  + '</script>\n')
 
     html += f"""
@@ -2820,7 +2819,8 @@ def main():
         if "shipping_export" in texts:
             shipments = fulfillment.parse_shipping_export(texts["shipping_export"])
         cards = fetch_colors_from_scryfall(cards)
-        generate_html(cards, output_path, pull_sheet_orders=orders, shipments=shipments)
+        generate_html(cards, output_path, pull_sheet_orders=orders, shipments=shipments,
+                      other_products=fulfillment.parse_other_products(texts["pull_sheet"]))
         print(f"\nDone! Open {output_path} in your browser.")
         return
 
