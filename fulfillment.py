@@ -135,8 +135,12 @@ def _order_record(summary: dict | None, shipment: Shipment | None) -> dict:
     return record
 
 
-def card_records(cards_in_page_order: list) -> list[dict]:
-    """Card rows as the report renders them; index matches each row's data-index."""
+def card_records(cards_in_page_order: list, badges_of=lambda variant: [], price_of=lambda card: None) -> list[dict]:
+    """Card rows as the report renders them; index matches each row's data-index.
+
+    badges_of gives (css_class, label) per treatment, reusing the pull sheet's badge
+    styles; price_of gives an approximate market price per copy.
+    """
     return [{
         "index": i,
         "name": c.card_name,
@@ -145,6 +149,9 @@ def card_records(cards_in_page_order: list) -> list[dict]:
         "condition": c.condition,
         "foil": c.is_foil,
         "variant": c.variant,
+        "badges": [{"cls": cls, "label": label} for cls, label in badges_of(c.variant)],
+        "language": c.language,
+        "price": price_of(c),
         "image": c.image_url,
         "orders": c.orders or {},
     } for i, c in enumerate(cards_in_page_order)]
@@ -268,10 +275,11 @@ def step_panels() -> str:
             <h2>Pack each envelope</h2>
             <span class="ff-hint" id="ff-pack-progress"></span>
             <span class="ff-spacer"></span>
+            <label class="ff-check">Top-load cards worth $<input id="ff-topload" type="number" step="0.5" min="0" class="ff-topload-input"> or more</label>
             <label class="ff-check"><input type="checkbox" id="ff-hide-packed"> Hide packed</label>
             <button class="nav-btn danger" id="ff-reset-pack">Reset packing</button>
         </div>
-        <p class="ff-hint">Match each card to its label number. Click a card when it's in the envelope, or tick the envelope's box to mark all its cards in at once. Right-click a card to mark it missing.</p>
+        <p class="ff-hint">Match each card to its label number. Click a card when it's in the envelope, or tick the envelope's box to mark all its cards in at once. Prices are TCGplayer market prices (via Scryfall) per copy, a guide to which cards need a toploader, not what the buyer paid. Right-click a card to mark it missing.</p>
         <div class="ff-refunds" id="ff-refunds" hidden></div>
         <div class="envelopes" id="ff-envelopes"></div>
     </section>
@@ -361,6 +369,14 @@ FULFILLMENT_CSS = """
         .env-card.in { text-decoration: line-through; opacity: 0.5; }
         .env-card .qty { font-weight: 700; min-width: 2.5ch; }
         .env-card .meta { color: #8a93a8; font-size: 0.85em; }
+        .env-card-body { flex: 1; min-width: 0; }
+        .env-card .card-variant { font-size: 0.72em; }
+        .env-price { margin-left: auto; padding-left: 8px; color: #8a93a8; font-size: 0.85em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .env-price.top { color: #1a1a2e; background: #ffd54f; border-radius: 999px; padding: 1px 8px; font-weight: 700; }
+        .env-card.valuable { box-shadow: inset 3px 0 0 #ffd54f; }
+        .env-value { color: #ddd; font-weight: 600; }
+        .env-tops { color: #ffd54f; font-size: 0.85em; font-weight: 600; margin-top: 2px; }
+        .ff-topload-input { width: 70px; background: #0f1830; color: #eee; border: 1px solid #2c3a5e; border-radius: 6px; padding: 4px 6px; font: inherit; }
         .env-card.static { cursor: default; }
         .env-other { color: #f0b35a; font-size: 0.9em; margin-top: 6px; }
         .env-card.gone { opacity: 0.55; }
@@ -405,7 +421,7 @@ FULFILLMENT_JS = r"""
         const KEY = 'bulk-' + generationId + '-';
         const DEFAULTS = {
             layout: DATA.default_layout, margin: 0.1, id_line: 'num_id_count', uppercase: true, cut_lines: true,
-            return_address: '', tracking_limit: 5.0, value_limit: 50, big_order: 15, hide_printed: false,
+            return_address: '', tracking_limit: 5.0, value_limit: 50, big_order: 15, hide_printed: false, topload: 5,
             custom: { page_width: 4, page_height: 6, cols: 2, rows: 2, rotate: true },
         };
         const load = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch (e) { return fallback; } };
@@ -607,6 +623,7 @@ FULFILLMENT_JS = r"""
             fields.forEach((f) => write($('ff-' + f), settings[f]));
             Object.keys(DEFAULTS.custom).forEach((k) => write($('ff-c-' + k), settings.custom[k]));
             write($('ff-hide-printed'), settings.hide_printed);
+            write($('ff-topload'), settings.topload);
         }
         function currentLayout() {
             if (settings.layout !== 'custom') return DATA.layouts.find((l) => l.key === settings.layout) || DATA.layouts[0];
@@ -714,19 +731,28 @@ FULFILLMENT_JS = r"""
         $('ff-open-pdf').addEventListener('click', () => previewUrl && window.open(previewUrl, '_blank'));
 
         // ---- Pack + Set aside steps ------------------------------------------------
+        const isTopLoad = (c) => c.price != null && c.price >= settings.topload;
         function cardLine(o, x, clickable) {
             const c = x.card;
             const key = o.order_number + '|' + c.index;
             const m = missingOf(o.order_number, c.index);
             const gone = m >= x.qty;
-            const bits = [c.set_name + ' #' + c.number, c.condition + (c.foil ? ' Foil' : '')];
             const note = m ? '<span class="missing-note">' + (gone ? 'missing: refund' : m + ' of ' + x.qty + ' missing') + '</span>' : '';
+            // Same colored badges as the pull sheet rows, so treatments and foils stand out.
+            const badges = (c.badges || []).map((b) => '<span class="card-variant ' + esc(b.cls) + '">' + esc(b.label) + '</span>').join('')
+                + (c.foil ? '<span class="card-foil"> ★ FOIL</span>' : '')
+                + (c.language ? '<span class="card-language"> [' + esc(c.language) + ']</span>' : '');
+            const top = isTopLoad(c) && !gone;
+            const price = c.price != null
+                ? '<span class="env-price' + (top ? ' top' : '') + '" title="TCGplayer market price per copy (Scryfall, updated daily)">'
+                    + (top ? 'Top-load · ' : '') + '~' + money(c.price) + '</span>'
+                : '';
             clickable = clickable && !gone;
-            return '<li class="env-card' + (gone ? ' gone static' : clickable ? (packed[key] ? ' in' : '') : ' static') + '"'
+            return '<li class="env-card' + (gone ? ' gone static' : clickable ? (packed[key] ? ' in' : '') : ' static') + (top ? ' valuable' : '') + '"'
                 + ' data-card-line="' + esc(key) + '"'
                 + (clickable ? ' data-pack="' + esc(key) + '"' : '') + (c.image ? ' data-image="' + esc(c.image) + '"' : '') + '>'
-                + '<span class="qty">' + (gone ? x.qty : x.qty - m) + 'x</span><span><span>' + esc(c.name) + '</span>' + (c.variant ? ' <span class="meta">(' + esc(c.variant) + ')</span>' : '') + note
-                + '<div class="meta">' + esc(bits.join(' · ')) + '</div></span></li>';
+                + '<span class="qty">' + (gone ? x.qty : x.qty - m) + 'x</span><span class="env-card-body"><span>' + esc(c.name) + '</span>' + badges + note
+                + '<div class="meta">' + esc(c.set_name + ' #' + c.number + ' · ' + c.condition) + '</div></span>' + price + '</li>';
         }
         // Fully missing lines don't hold an envelope back; partly missing ones still need packing.
         const lineDone = (o, x) => missingOf(o.order_number, x.card.index) >= x.qty || packed[o.order_number + '|' + x.card.index];
@@ -770,9 +796,13 @@ FULFILLMENT_JS = r"""
                 const inCount = lines.filter((x) => lineDone(o, x)).length;
                 const miss = missingTotal(o);
                 const p = isPacked(o);
+                const tops = lines.filter((x) => isTopLoad(x.card) && missingOf(o.order_number, x.card.index) < x.qty)
+                    .reduce((n, x) => n + x.qty - missingOf(o.order_number, x.card.index), 0);
                 return '<div class="envelope' + (p ? ' packed' : '') + '">'
                     + '<div class="env-head"><span class="env-no">#' + labelNo[o.order_number] + '</span>'
-                    + '<span class="env-title"><b>' + esc(o.first_name) + ' ' + esc(o.last_name) + '</b> <span class="meta">' + esc(o.short_id) + ' · ' + cardCount(o) + 'x</span></span>'
+                    + '<span class="env-title"><b>' + esc(o.first_name) + ' ' + esc(o.last_name) + '</b> <span class="meta">' + esc(o.short_id) + ' · ' + cardCount(o) + 'x · '
+                    + '<span class="env-value">' + money(o.product_value) + '</span></span>'
+                    + (tops ? '<div class="env-tops">' + tops + ' to top-load</div>' : '') + '</span>'
                     + '<label class="env-status env-done"><input type="checkbox" data-pack-order="' + esc(o.order_number) + '"' + (p ? ' checked' : '')
                     + ' aria-label="Envelope #' + labelNo[o.order_number] + ' packed"> ' + (p ? 'Packed' : inCount + ' / ' + lines.length + ' in') + '</label></div>'
                     + (miss ? '<div class="env-reasons"><span class="ff-chip bad">' + miss + ' missing: refund the buyer</span></div>' : '')
@@ -811,6 +841,11 @@ FULFILLMENT_JS = r"""
             render();
         });
         $('ff-hide-packed').addEventListener('change', renderPack);
+        $('ff-topload').addEventListener('input', () => {
+            settings.topload = Number($('ff-topload').value) || 0;
+            save();
+            render();
+        });
         $('ff-reset-pack').addEventListener('click', () => {
             if (!confirm('Clear packing progress for every envelope?')) return;
             packed = {};

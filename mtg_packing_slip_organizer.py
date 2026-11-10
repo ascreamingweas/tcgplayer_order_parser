@@ -51,6 +51,7 @@ class Card:
     cmc: Optional[float] = None  # Converted mana cost, from Scryfall
     type_line: Optional[str] = None  # Scryfall type line, e.g. "Creature — Elf"
     set_type: Optional[str] = None  # Scryfall set type of the printing; "masterpiece" = bonus sheet
+    prices: Optional[dict] = None  # Scryfall's TCGplayer market prices: usd / usd_foil / usd_etched
     orders: Optional[dict[str, int]] = None  # Pull-sheet mode: order number -> qty of this card
 
 
@@ -147,6 +148,31 @@ PREMIUM_TREATMENTS = (
     'borderless', 'extended art', 'showcase', 'retro frame', 'full art', 'future sight',
     'alternate art', 'white border',
 )
+
+
+def variant_badges(variant: Optional[str]) -> list[tuple[str, str]]:
+    """(css_class, label) for each treatment in a variant like "Promo / Extended Art"."""
+    if not variant:
+        return []
+    return [get_variant_style(part.strip())[:2] for part in variant.split("/") if part.strip()]
+
+
+def market_price(card: "Card") -> Optional[float]:
+    """Approximate value of one copy: Scryfall's TCGplayer market price for the
+    finish (foil / etched / regular), or None when Scryfall has no price."""
+    prices = card.prices or {}
+    if card.is_foil:
+        etched = "etched" in (card.variant or "").lower()
+        order = ("usd_etched", "usd_foil", "usd") if etched else ("usd_foil", "usd_etched", "usd")
+    else:
+        order = ("usd", "usd_foil", "usd_etched")
+    for key in order:
+        try:
+            if prices.get(key):
+                return float(prices[key])
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def is_premium_treatment(variant: Optional[str]) -> bool:
@@ -1324,6 +1350,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
     meta_cache = {}   # (card_name, kind) -> (cmc, type_line); same across printings
     rarity_cache = {} # (set_name, collector_number, kind) -> rarity code; per printing
     set_type_cache = {}  # (set_name, collector_number, kind) -> Scryfall set type; per printing
+    prices_cache = {}    # (set_name, collector_number, kind) -> Scryfall prices; per printing
 
     # Track failed lookups for summary
     failed_lookups = []
@@ -1354,6 +1381,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
             if image_cache_key in rarity_cache:
                 card.rarity = rarity_cache[image_cache_key]
             card.set_type = set_type_cache.get(image_cache_key)
+            card.prices = prices_cache.get(image_cache_key)
             status = f"{card.color} (cached)"
             print(f"  [{i+1}/{total}] {card.card_name}: {status}")
         else:
@@ -1366,6 +1394,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
                 card.cmc = scryfall_data.get("cmc")
                 card.type_line = scryfall_data.get("type_line")
                 card.set_type = scryfall_data.get("set_type")
+                card.prices = scryfall_data.get("prices")
                 # Prefer Scryfall's authoritative rarity over the slip's parsed
                 # value, which can reflect the product (e.g. "P" for Promo Pack)
                 # rather than the card's real rarity. Charms in Promo Packs, for
@@ -1412,6 +1441,7 @@ def fetch_colors_from_scryfall(cards: list[Card], on_progress=None) -> list[Card
             meta_cache[color_cache_key] = (card.cmc, card.type_line)
             rarity_cache[image_cache_key] = card.rarity
             set_type_cache[image_cache_key] = card.set_type
+            prices_cache[image_cache_key] = card.prices
 
         if on_progress:
             on_progress(i + 1, total, card.card_name, status)
@@ -2392,7 +2422,7 @@ def generate_html(cards: list[Card], output_path: str = None, order_number: str 
         orders_data = fulfillment.build_orders(pull_sheet_orders, shipments)
         html += "    </section>\n" + fulfillment.step_panels()
         html += ('    <script type="application/json" id="fulfillment-data">'
-                 + fulfillment.report_data(orders_data, fulfillment.card_records(cards_in_page_order))
+                 + fulfillment.report_data(orders_data, fulfillment.card_records(cards_in_page_order, variant_badges, market_price))
                  + '</script>\n')
 
     html += f"""

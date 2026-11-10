@@ -30,8 +30,9 @@ REFRESH_EVERY = 24 * 60 * 60  # Scryfall regenerates the file about every 12 hou
 # exact printing). Everything else in the bulk file is dropped to keep the DB small.
 CARD_FIELDS = ("name", "set", "set_name", "set_type", "collector_number", "colors", "cmc", "type_line", "rarity",
                "layout", "promo_types", "frame_effects", "released_at", "lang", "digital")
+PRICE_FIELDS = ("usd", "usd_foil", "usd_etched")
 # Bump when CARD_FIELDS changes, so existing copies are rebuilt with the new fields.
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 FACE_FIELDS = ("name", "type_line", "colors")
 
 _lock = threading.Lock()
@@ -46,6 +47,10 @@ def _connect(path: Path = None) -> sqlite3.Connection:
 
 def _trim(card: dict) -> dict:
     out = {k: card[k] for k in CARD_FIELDS if k in card}
+    # TCGplayer market prices (Scryfall's daily snapshot), for the Pack step's value hints.
+    prices = {k: card["prices"][k] for k in PRICE_FIELDS if (card.get("prices") or {}).get(k)}
+    if prices:
+        out["prices"] = prices
     if card.get("image_uris", {}).get("normal"):
         out["image_uris"] = {"normal": card["image_uris"]["normal"]}
     if card.get("card_faces"):
